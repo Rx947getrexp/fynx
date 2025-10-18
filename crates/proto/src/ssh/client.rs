@@ -22,7 +22,7 @@
 //! # }
 //! ```
 
-use crate::ssh::auth::{AuthMethod, AuthRequest};
+use crate::ssh::auth::{construct_signature_data, AuthMethod, AuthPkOk, AuthRequest};
 use crate::ssh::connection::{
     ChannelData, ChannelOpen, ChannelOpenConfirmation, ChannelRequest, ChannelRequestType,
     ChannelType,
@@ -32,6 +32,7 @@ use crate::ssh::kex::{negotiate_algorithm, KexInit, NewKeys};
 use crate::ssh::kex_dh::Curve25519Exchange;
 use crate::ssh::message::MessageType;
 use crate::ssh::packet::Packet;
+use crate::ssh::privatekey::PrivateKey;
 use crate::ssh::transport::{State, TransportConfig, TransportState};
 use crate::ssh::version::Version;
 use fynx_platform::{FynxError, FynxResult};
@@ -97,6 +98,9 @@ pub struct SshClient {
     client_kexinit_payload: Vec<u8>,
     /// Server KEXINIT payload (for exchange hash computation).
     server_kexinit_payload: Vec<u8>,
+    /// Session identifier (exchange hash from first key exchange).
+    /// Used for public key authentication signatures.
+    session_id: Option<Vec<u8>>,
 }
 
 impl SshClient {
@@ -152,6 +156,7 @@ impl SshClient {
             server_version: String::new(),
             client_kexinit_payload: Vec::new(),
             server_kexinit_payload: Vec::new(),
+            session_id: None,
         };
 
         // 2. Version exchange
@@ -628,8 +633,16 @@ impl SshClient {
         self.verify_host_key_signature(&exchange_hash, signature_blob)?;
 
         // Store exchange hash as session ID (first exchange hash in connection)
-        // For now we'll use exchange_hash as session_id (proper implementation tracks first H)
-        let session_id = exchange_hash.clone();
+        // Session ID is the exchange hash H from the first key exchange (RFC 4253 Section 7.2)
+        let session_id = if self.session_id.is_none() {
+            // First key exchange - set session_id to H
+            let sid = exchange_hash.clone();
+            self.session_id = Some(sid.clone());
+            sid
+        } else {
+            // Rekeying - use original session_id
+            self.session_id.clone().unwrap()
+        };
 
         // Derive encryption/MAC keys according to RFC 4253 Section 7.2
         // Key derivation uses: K (shared secret), H (exchange hash), session_id
@@ -740,6 +753,160 @@ impl SshClient {
             }
             msg_type if msg_type == MessageType::UserauthFailure as u8 => {
                 Err(FynxError::Protocol("Authentication failed".to_string()))
+            }
+            _ => Err(FynxError::Protocol("Unexpected auth response".to_string())),
+        }
+    }
+
+    /// Authenticates using public key authentication (RFC 4252 Section 7).
+    ///
+    /// This implements the try-then-sign flow:
+    /// 1. Send USERAUTH_REQUEST without signature (query if key is acceptable)
+    /// 2. Wait for USERAUTH_PK_OK
+    /// 3. Send USERAUTH_REQUEST with signature
+    /// 4. Wait for USERAUTH_SUCCESS or USERAUTH_FAILURE
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - User name to authenticate as
+    /// * `private_key` - Private key for authentication
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fynx_proto::ssh::client::SshClient;
+    /// # use fynx_proto::ssh::privatekey::PrivateKey;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let mut client = SshClient::connect("server:22").await?;
+    /// let private_key = PrivateKey::from_file("~/.ssh/id_ed25519", None)?;
+    /// client.authenticate_publickey("alice", &private_key).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn authenticate_publickey(
+        &mut self,
+        username: &str,
+        private_key: &PrivateKey,
+    ) -> FynxResult<()> {
+        // Get session_id (must have completed key exchange)
+        let session_id = self
+            .session_id
+            .as_ref()
+            .ok_or_else(|| {
+                FynxError::Protocol(
+                    "No session ID available (key exchange not completed)".to_string(),
+                )
+            })?
+            .clone();
+
+        // Send SERVICE_REQUEST for ssh-userauth
+        let mut service_req = vec![MessageType::ServiceRequest as u8];
+        let service_name = b"ssh-userauth";
+        service_req.extend_from_slice(&(service_name.len() as u32).to_be_bytes());
+        service_req.extend_from_slice(service_name);
+        self.send_packet(&service_req).await?;
+
+        // Wait for SERVICE_ACCEPT
+        let response = self.receive_packet().await?;
+        if response.payload().is_empty()
+            || response.payload()[0] != MessageType::ServiceAccept as u8
+        {
+            return Err(FynxError::Protocol("Expected SERVICE_ACCEPT".to_string()));
+        }
+
+        // Get public key and algorithm
+        let public_key = private_key.public_key();
+        let algorithm = public_key.algorithm();
+        let public_key_blob = public_key.to_ssh_bytes();
+
+        // Step 1: Try-then-sign - send query without signature
+        let try_request = AuthRequest::new(
+            username,
+            "ssh-connection",
+            AuthMethod::PublicKey {
+                algorithm: algorithm.to_string(),
+                public_key: public_key_blob.clone(),
+                signature: None,
+            },
+        );
+
+        self.send_packet(&try_request.to_bytes()).await?;
+
+        // Wait for USERAUTH_PK_OK
+        let pk_ok_response = self.receive_packet().await?;
+        if pk_ok_response.payload().is_empty() {
+            return Err(FynxError::Protocol("Empty PK_OK response".to_string()));
+        }
+
+        match pk_ok_response.payload()[0] {
+            msg_type if msg_type == MessageType::UserauthPkOk as u8 => {
+                // Server accepted the key, proceed to sign
+                let _pk_ok = AuthPkOk::from_bytes(pk_ok_response.payload())?;
+                // Continue to signature step
+            }
+            msg_type if msg_type == MessageType::UserauthFailure as u8 => {
+                return Err(FynxError::Protocol(
+                    "Public key not accepted by server".to_string(),
+                ));
+            }
+            _ => {
+                return Err(FynxError::Protocol(format!(
+                    "Unexpected response to public key query: {}",
+                    pk_ok_response.payload()[0]
+                )));
+            }
+        }
+
+        // Step 2: Construct signature data (RFC 4252 Section 7)
+        let signature_data = construct_signature_data(
+            &session_id,
+            username,
+            "ssh-connection",
+            algorithm,
+            &public_key_blob,
+        );
+
+        // Sign the data
+        let raw_signature = private_key.sign(&signature_data)?;
+
+        // Encode signature in SSH format (string algorithm || string signature)
+        let mut signature_blob = Vec::new();
+        // string algorithm
+        signature_blob.extend_from_slice(&(algorithm.len() as u32).to_be_bytes());
+        signature_blob.extend_from_slice(algorithm.as_bytes());
+        // string signature
+        signature_blob.extend_from_slice(&(raw_signature.len() as u32).to_be_bytes());
+        signature_blob.extend_from_slice(&raw_signature);
+
+        // Step 3: Send USERAUTH_REQUEST with signature
+        let sign_request = AuthRequest::new(
+            username,
+            "ssh-connection",
+            AuthMethod::PublicKey {
+                algorithm: algorithm.to_string(),
+                public_key: public_key_blob,
+                signature: Some(signature_blob),
+            },
+        );
+
+        self.send_packet(&sign_request.to_bytes()).await?;
+
+        // Wait for USERAUTH_SUCCESS or USERAUTH_FAILURE
+        let auth_response = self.receive_packet().await?;
+        if auth_response.payload().is_empty() {
+            return Err(FynxError::Protocol("Empty auth response".to_string()));
+        }
+
+        match auth_response.payload()[0] {
+            msg_type if msg_type == MessageType::UserauthSuccess as u8 => {
+                self.username = Some(username.to_string());
+                Ok(())
+            }
+            msg_type if msg_type == MessageType::UserauthFailure as u8 => {
+                Err(FynxError::Protocol(
+                    "Public key authentication failed (signature rejected)".to_string(),
+                ))
             }
             _ => Err(FynxError::Protocol("Unexpected auth response".to_string())),
         }
