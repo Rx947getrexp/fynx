@@ -48,6 +48,7 @@
 //! - [RFC 4254](https://datatracker.ietf.org/doc/html/rfc4254) - SSH Connection Protocol
 
 pub mod auth;
+pub mod authorized_keys;
 pub mod client;
 pub mod connection;
 pub mod crypto;
@@ -63,8 +64,10 @@ pub mod version;
 
 // Re-export main types
 pub use auth::{
-    constant_time_compare, AuthBanner, AuthFailure, AuthMethod, AuthRequest, AuthSuccess,
+    constant_time_compare, AuthBanner, AuthFailure, AuthMethod, AuthPkOk, AuthRequest,
+    AuthSuccess, construct_signature_data,
 };
+pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
 pub use client::{SshClient, SshClientConfig};
 pub use connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure, ChannelOpen,
