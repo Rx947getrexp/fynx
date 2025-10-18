@@ -1,0 +1,21 @@
+[package]
+name = "fynx-proto-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.fynx-proto]
+path = ".."
+
+[[bin]]
+name = "ssh_packet"
+path = "fuzz_targets/ssh_packet.rs"
+test = false
+doc = false

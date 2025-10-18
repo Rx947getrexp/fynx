@@ -1,0 +1,30 @@
+[package]
+name = "fynx-platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/fynx-platform"
+homepage = "https://fynx.dev"
+readme = "README.md"
+description = "Core platform and types for the Fynx security ecosystem"
+keywords = ["security", "platform", "types", "traits"]
+categories = ["development-tools", "api-bindings"]
+
+[dependencies]
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+tracing = "0.1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[badges]
+maintenance = { status = "actively-developed" }

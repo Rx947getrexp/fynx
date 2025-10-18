@@ -1,0 +1,76 @@
+[package]
+name = "fynx-proto"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Fynx Core Team"]
+description = "Protocol implementations for the Fynx security ecosystem (SSH, DTLS, IPSec)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/fynx-project/fynx"
+keywords = ["ssh", "security", "protocol", "network"]
+categories = ["network-programming", "cryptography"]
+
+[features]
+default = ["ssh"]
+ssh = []
+dtls = []
+ipsec = []
+tty-password = ["rpassword"]
+
+[dependencies]
+fynx-platform = { path = "../platform" }
+
+# Async runtime
+tokio = { version = "1.35", features = ["net", "io-util", "sync", "time", "rt"] }
+async-trait = "0.1"
+
+# Crypto
+ring = "0.17"
+sha2 = "0.10"
+hmac = "0.12"
+x25519-dalek = "2.0"
+ed25519-dalek = "2.1"
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa"] }
+ecdsa = "0.16"
+signature = "2.2"
+
+# Utilities
+bytes = "1.5"
+zeroize = { version = "1.7", features = ["derive"] }
+rand = "0.8"
+thiserror = "1.0"
+hex = "0.4"
+num-bigint = { version = "0.4", features = ["rand"] }
+once_cell = "1.19"
+subtle = "2.5"
+
+# Private key parsing
+pkcs1 = { version = "0.7", features = ["pem"] }
+pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
+sec1 = { version = "0.7", features = ["pem"] }
+rsa = "0.9"
+base64 = "0.22"
+
+# bcrypt-pbkdf for OpenSSH format
+bcrypt-pbkdf = "0.10"
+
+# Encryption algorithms for encrypted private keys
+des = "0.8"
+aes = "0.8"
+cbc = "0.1"
+ctr = "0.9"
+md-5 = "0.10"
+
+# Optional compression
+flate2 = { version = "1.0", optional = true }
+
+# Optional: terminal password input
+rpassword = { version = "7.3", optional = true }
+
+[dev-dependencies]
+hex-literal = "0.4"
+criterion = "0.5"
+proptest = "1.4"
+tokio = { version = "1.35", features = ["macros", "rt-multi-thread"] }

@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check all modules
+        run: cargo check --all-features --workspace
+
+      - name: Run tests
+        run: cargo test --all-features --workspace
+
+      - name: Publish fynx-platform
+        run: cd crates/platform && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true
+
+      - name: Wait for fynx-platform to be available
+        run: sleep 30
+
+      - name: Publish fynx-proto
+        run: cd crates/proto && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true
+
+      - name: Publish fynx-protect
+        run: cd crates/protect && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true
+
+      - name: Publish fynx-detect
+        run: cd crates/detect && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true
+
+      - name: Publish fynx-exploit
+        run: cd crates/exploit && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+        continue-on-error: true
+
+      - name: Wait for modules to be available
+        run: sleep 30
+
+      - name: Publish fynx
+        run: cd crates/rustsec && cargo publish --token ${{ secrets.CARGO_TOKEN }}
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: false

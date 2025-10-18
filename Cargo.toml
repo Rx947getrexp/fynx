@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/platform",
+    "crates/proto",
+    "crates/protect",
+    "crates/detect",
+    "crates/exploit",
+    "crates/rustsec",
+]
+
+[workspace.package]
+version = "0.0.1-alpha"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/你的用户名/fynx"
+authors = ["Your Name <your.email@example.com>"]
+# Note: This is a technical preview. NOT for production use.
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cryptography
+ring = "0.17"
+rustls = "0.22"
+x509-parser = "0.16"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Testing
+criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+inherits = "release"
