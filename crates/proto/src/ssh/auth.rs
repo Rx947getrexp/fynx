@@ -479,6 +479,169 @@ impl AuthBanner {
     }
 }
 
+/// SSH_MSG_USERAUTH_PK_OK message (RFC 4252 Section 7).
+///
+/// Sent by the server to indicate that the public key is acceptable
+/// for authentication (in response to a try-then-sign query).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthPkOk {
+    /// Public key algorithm name
+    algorithm: String,
+    /// Public key blob
+    public_key: Vec<u8>,
+}
+
+impl AuthPkOk {
+    /// Creates a new SSH_MSG_USERAUTH_PK_OK message.
+    ///
+    /// # Arguments
+    ///
+    /// * `algorithm` - Public key algorithm name (e.g., "ssh-ed25519")
+    /// * `public_key` - Public key blob
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use fynx_proto::ssh::auth::AuthPkOk;
+    ///
+    /// let pk_ok = AuthPkOk::new("ssh-ed25519", vec![1, 2, 3, 4]);
+    /// ```
+    pub fn new(algorithm: impl Into<String>, public_key: Vec<u8>) -> Self {
+        Self {
+            algorithm: algorithm.into(),
+            public_key,
+        }
+    }
+
+    /// Returns the algorithm name.
+    pub fn algorithm(&self) -> &str {
+        &self.algorithm
+    }
+
+    /// Returns the public key blob.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    /// Serializes to bytes.
+    ///
+    /// Format (RFC 4252 Section 7):
+    /// ```text
+    /// byte      SSH_MSG_USERAUTH_PK_OK (60)
+    /// string    public key algorithm name
+    /// string    public key blob
+    /// ```
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = BytesMut::new();
+
+        // byte SSH_MSG_USERAUTH_PK_OK (60)
+        buf.put_u8(60);
+
+        // string algorithm name
+        write_string(&mut buf, &self.algorithm);
+
+        // string public key blob
+        write_bytes(&mut buf, &self.public_key);
+
+        buf.to_vec()
+    }
+
+    /// Parses from bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FynxError::Protocol`] if the data is invalid.
+    pub fn from_bytes(data: &[u8]) -> FynxResult<Self> {
+        if data.is_empty() {
+            return Err(FynxError::Protocol(
+                "USERAUTH_PK_OK message is empty".to_string(),
+            ));
+        }
+
+        if data[0] != 60 {
+            return Err(FynxError::Protocol(format!(
+                "Invalid message type: expected 60 (SSH_MSG_USERAUTH_PK_OK), got {}",
+                data[0]
+            )));
+        }
+
+        let mut offset = 1;
+
+        // string algorithm name
+        let algorithm = read_string(data, &mut offset)?;
+
+        // string public key blob
+        let public_key = read_bytes(data, &mut offset)?;
+
+        Ok(Self {
+            algorithm,
+            public_key,
+        })
+    }
+}
+
+/// Constructs the data to be signed for public key authentication (RFC 4252 Section 7).
+///
+/// # Arguments
+///
+/// * `session_id` - Session identifier from key exchange
+/// * `user_name` - User name for authentication
+/// * `service_name` - Service name (usually "ssh-connection")
+/// * `algorithm` - Public key algorithm name
+/// * `public_key_blob` - Public key in SSH wire format
+///
+/// # Returns
+///
+/// Bytes to be signed
+///
+/// # Format
+///
+/// ```text
+/// string    session identifier
+/// byte      SSH_MSG_USERAUTH_REQUEST (50)
+/// string    user name
+/// string    service name
+/// string    "publickey"
+/// boolean   TRUE (has signature)
+/// string    public key algorithm name
+/// string    public key blob
+/// ```
+pub fn construct_signature_data(
+    session_id: &[u8],
+    user_name: &str,
+    service_name: &str,
+    algorithm: &str,
+    public_key_blob: &[u8],
+) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+
+    // string session identifier
+    write_bytes(&mut buf, session_id);
+
+    // byte SSH_MSG_USERAUTH_REQUEST (50)
+    buf.put_u8(50);
+
+    // string user name
+    write_string(&mut buf, user_name);
+
+    // string service name
+    write_string(&mut buf, service_name);
+
+    // string "publickey"
+    write_string(&mut buf, "publickey");
+
+    // boolean TRUE (has signature)
+    buf.put_u8(1);
+
+    // string public key algorithm name
+    write_string(&mut buf, algorithm);
+
+    // string public key blob
+    write_bytes(&mut buf, public_key_blob);
+
+    buf.to_vec()
+}
+
 /// Compares two passwords in constant time to prevent timing attacks.
 ///
 /// # Arguments
@@ -680,5 +843,57 @@ mod tests {
         let method = AuthMethod::Password("secret".to_string());
         drop(method);
         // Password should be zeroized (can't test directly, but ensures no panic)
+    }
+
+    #[test]
+    fn test_auth_pk_ok() {
+        let public_key = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let pk_ok = AuthPkOk::new("ssh-ed25519", public_key.clone());
+
+        assert_eq!(pk_ok.algorithm(), "ssh-ed25519");
+        assert_eq!(pk_ok.public_key(), &public_key);
+
+        let bytes = pk_ok.to_bytes();
+        assert_eq!(bytes[0], 60); // SSH_MSG_USERAUTH_PK_OK
+
+        let parsed = AuthPkOk::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.algorithm(), "ssh-ed25519");
+        assert_eq!(parsed.public_key(), &public_key);
+    }
+
+    #[test]
+    fn test_auth_pk_ok_invalid_message_type() {
+        let data = vec![50, 0, 0, 0, 0]; // Wrong message type (50 instead of 60)
+        let result = AuthPkOk::from_bytes(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_construct_signature_data() {
+        let session_id = vec![1, 2, 3, 4];
+        let user_name = "alice";
+        let service_name = "ssh-connection";
+        let algorithm = "ssh-ed25519";
+        let public_key_blob = vec![5, 6, 7, 8];
+
+        let data = construct_signature_data(
+            &session_id,
+            user_name,
+            service_name,
+            algorithm,
+            &public_key_blob,
+        );
+
+        // Should contain all required fields
+        assert!(!data.is_empty());
+
+        // Check that session_id is at the beginning
+        let sid_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        assert_eq!(sid_len, session_id.len());
+        assert_eq!(&data[4..4 + sid_len], &session_id[..]);
+
+        // Check SSH_MSG_USERAUTH_REQUEST (50)
+        let msg_type_offset = 4 + sid_len;
+        assert_eq!(data[msg_type_offset], 50);
     }
 }

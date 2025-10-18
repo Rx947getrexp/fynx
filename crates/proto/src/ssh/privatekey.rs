@@ -67,6 +67,83 @@ pub enum PublicKey {
     },
 }
 
+impl PublicKey {
+    /// Serialize public key to SSH wire format (RFC 4253).
+    ///
+    /// Format:
+    /// ```text
+    /// string    algorithm name
+    /// string    algorithm-specific data
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use fynx_proto::ssh::privatekey::PublicKey;
+    /// let public_key = PublicKey::Ed25519([0u8; 32]);
+    /// let bytes = public_key.to_ssh_bytes();
+    /// ```
+    pub fn to_ssh_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        match self {
+            PublicKey::Rsa { e, n } => {
+                // string "ssh-rsa"
+                write_ssh_string(&mut buf, b"ssh-rsa");
+                // string e (public exponent)
+                write_ssh_string(&mut buf, e);
+                // string n (modulus)
+                write_ssh_string(&mut buf, n);
+            }
+            PublicKey::Ed25519(key) => {
+                // string "ssh-ed25519"
+                write_ssh_string(&mut buf, b"ssh-ed25519");
+                // string public key (32 bytes)
+                write_ssh_string(&mut buf, key);
+            }
+            PublicKey::Ecdsa { curve, public_key } => {
+                // string algorithm name (e.g., "ecdsa-sha2-nistp256")
+                let algorithm = format!("ecdsa-sha2-{}", curve);
+                write_ssh_string(&mut buf, algorithm.as_bytes());
+                // string curve name (e.g., "nistp256")
+                write_ssh_string(&mut buf, curve.as_bytes());
+                // string public key point (Q)
+                write_ssh_string(&mut buf, public_key);
+            }
+        }
+
+        buf
+    }
+
+    /// Get the algorithm name for this public key.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use fynx_proto::ssh::privatekey::PublicKey;
+    /// let public_key = PublicKey::Ed25519([0u8; 32]);
+    /// assert_eq!(public_key.algorithm(), "ssh-ed25519");
+    /// ```
+    pub fn algorithm(&self) -> &str {
+        match self {
+            PublicKey::Rsa { .. } => "ssh-rsa",
+            PublicKey::Ed25519(_) => "ssh-ed25519",
+            PublicKey::Ecdsa { curve, .. } => match curve.as_str() {
+                "nistp256" => "ecdsa-sha2-nistp256",
+                "nistp384" => "ecdsa-sha2-nistp384",
+                "nistp521" => "ecdsa-sha2-nistp521",
+                _ => "ecdsa-sha2-unknown",
+            },
+        }
+    }
+}
+
+/// Helper function to write SSH string format (4-byte length + data).
+fn write_ssh_string(buf: &mut Vec<u8>, data: &[u8]) {
+    buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    buf.extend_from_slice(data);
+}
+
 /// SSH private key
 ///
 /// Supported key types:
@@ -1220,6 +1297,49 @@ iulMrvo+csmBnppKvNWL8KrxKXavrIpsF0Lvx9vY9+G+m9vekydtEMVlrCaFR0PIvTpYZt
             result.is_err(),
             "Should reject wrong password (check1 != check2)"
         );
+    }
+
+    #[test]
+    fn test_public_key_to_ssh_bytes_ed25519() {
+        let public_key = PublicKey::Ed25519([1u8; 32]);
+        let bytes = public_key.to_ssh_bytes();
+
+        // Should contain algorithm name "ssh-ed25519" and 32-byte key
+        assert!(bytes.len() > 32);
+
+        // Check algorithm string
+        let algo_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        assert_eq!(algo_len, 11); // "ssh-ed25519" length
+        let algo = String::from_utf8_lossy(&bytes[4..4 + algo_len]);
+        assert_eq!(algo, "ssh-ed25519");
+
+        // Check public key bytes
+        let key_offset = 4 + algo_len;
+        let key_len = u32::from_be_bytes([
+            bytes[key_offset],
+            bytes[key_offset + 1],
+            bytes[key_offset + 2],
+            bytes[key_offset + 3],
+        ]) as usize;
+        assert_eq!(key_len, 32);
+    }
+
+    #[test]
+    fn test_public_key_algorithm() {
+        let ed25519 = PublicKey::Ed25519([0u8; 32]);
+        assert_eq!(ed25519.algorithm(), "ssh-ed25519");
+
+        let rsa = PublicKey::Rsa {
+            e: vec![1, 0, 1],
+            n: vec![0; 256],
+        };
+        assert_eq!(rsa.algorithm(), "ssh-rsa");
+
+        let ecdsa = PublicKey::Ecdsa {
+            curve: "nistp256".to_string(),
+            public_key: vec![0; 65],
+        };
+        assert_eq!(ecdsa.algorithm(), "ecdsa-sha2-nistp256");
     }
 
     // TODO: More tests for RSA/ECDSA OpenSSH format, etc.

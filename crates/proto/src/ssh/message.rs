@@ -62,6 +62,8 @@ pub enum MessageType {
     UserauthSuccess = 52,
     /// User authentication banner.
     UserauthBanner = 53,
+    /// Public key OK (server accepts public key for authentication).
+    UserauthPkOk = 60,
 
     // Connection protocol generic (80-127)
     /// Global request.
@@ -129,6 +131,7 @@ impl MessageType {
             51 => Some(MessageType::UserauthFailure),
             52 => Some(MessageType::UserauthSuccess),
             53 => Some(MessageType::UserauthBanner),
+            60 => Some(MessageType::UserauthPkOk),
             80 => Some(MessageType::GlobalRequest),
             81 => Some(MessageType::RequestSuccess),
             82 => Some(MessageType::RequestFailure),
@@ -172,6 +175,7 @@ impl MessageType {
             MessageType::UserauthFailure => "SSH_MSG_USERAUTH_FAILURE",
             MessageType::UserauthSuccess => "SSH_MSG_USERAUTH_SUCCESS",
             MessageType::UserauthBanner => "SSH_MSG_USERAUTH_BANNER",
+            MessageType::UserauthPkOk => "SSH_MSG_USERAUTH_PK_OK",
             MessageType::GlobalRequest => "SSH_MSG_GLOBAL_REQUEST",
             MessageType::RequestSuccess => "SSH_MSG_REQUEST_SUCCESS",
             MessageType::RequestFailure => "SSH_MSG_REQUEST_FAILURE",
