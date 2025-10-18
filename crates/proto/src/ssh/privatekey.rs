@@ -408,7 +408,24 @@ mod pem {
     /// Parse PEM format private key
     pub fn parse_pem(pem_str: &str, password: Option<&str>) -> FynxResult<PrivateKey> {
         // Detect key type
-        if pem_str.contains("BEGIN RSA PRIVATE KEY") {
+        if pem_str.contains("BEGIN OPENSSH PRIVATE KEY") {
+            // OpenSSH format - decode base64 and parse
+            use base64::Engine;
+            let base64_data = pem_str
+                .lines()
+                .filter(|l| !l.starts_with("-----"))
+                .collect::<String>()
+                .replace("\n", "")
+                .replace("\r", "");
+
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(&base64_data)
+                .map_err(|e| {
+                    FynxError::Protocol(format!("Failed to decode OpenSSH base64: {}", e))
+                })?;
+
+            super::openssh::parse_openssh(&data, password)
+        } else if pem_str.contains("BEGIN RSA PRIVATE KEY") {
             parse_rsa_pkcs1(pem_str, password)
         } else if pem_str.contains("BEGIN EC PRIVATE KEY") {
             parse_ec_sec1(pem_str, password)
@@ -650,12 +667,228 @@ mod pem {
 mod openssh {
     use super::*;
 
+    /// OpenSSH private key magic bytes
+    const OPENSSH_MAGIC: &[u8] = b"openssh-key-v1\0";
+
     /// Parse OpenSSH format private key
-    pub fn parse_openssh(_data: &[u8], _password: Option<&str>) -> FynxResult<PrivateKey> {
-        // TODO: Implement OpenSSH format parsing
+    ///
+    /// OpenSSH format structure:
+    /// - Magic: "openssh-key-v1\0"
+    /// - Cipher name (string)
+    /// - KDF name (string)
+    /// - KDF options (string)
+    /// - Number of keys (uint32)
+    /// - Public key (string)
+    /// - Encrypted private key data (string)
+    pub fn parse_openssh(data: &[u8], password: Option<&str>) -> FynxResult<PrivateKey> {
+        let mut cursor = 0;
+
+        // Verify magic bytes
+        if data.len() < OPENSSH_MAGIC.len() {
+            return Err(FynxError::Protocol(
+                "OpenSSH key data too short".to_string(),
+            ));
+        }
+
+        if &data[..OPENSSH_MAGIC.len()] != OPENSSH_MAGIC {
+            return Err(FynxError::Protocol(format!(
+                "Invalid OpenSSH magic bytes: expected {:?}, got {:?}",
+                OPENSSH_MAGIC,
+                &data[..OPENSSH_MAGIC.len().min(data.len())]
+            )));
+        }
+        cursor += OPENSSH_MAGIC.len();
+
+        // Read cipher name
+        let cipher_name = read_string(data, &mut cursor)?;
+        let cipher_name_str = std::str::from_utf8(&cipher_name)
+            .map_err(|_| FynxError::Protocol("Invalid UTF-8 in cipher name".to_string()))?;
+
+        // Read KDF name
+        let kdf_name = read_string(data, &mut cursor)?;
+        let kdf_name_str = std::str::from_utf8(&kdf_name)
+            .map_err(|_| FynxError::Protocol("Invalid UTF-8 in KDF name".to_string()))?;
+
+        // Read KDF options
+        let kdf_options = read_string(data, &mut cursor)?;
+
+        // Read number of keys
+        let num_keys = read_u32(data, &mut cursor)?;
+        if num_keys != 1 {
+            return Err(FynxError::Protocol(format!(
+                "Expected 1 key, found {}",
+                num_keys
+            )));
+        }
+
+        // Read public key (we don't use this, but need to skip it)
+        let _public_key = read_string(data, &mut cursor)?;
+
+        // Read encrypted private key data
+        let encrypted_data = read_string(data, &mut cursor)?;
+
+        // Decrypt if necessary
+        let decrypted_data = if cipher_name_str == "none" {
+            // Unencrypted
+            encrypted_data
+        } else {
+            // Encrypted - need password
+            let password = password.ok_or_else(|| {
+                FynxError::Protocol("Password required for encrypted key".to_string())
+            })?;
+
+            decrypt_private_key(
+                &encrypted_data,
+                cipher_name_str,
+                kdf_name_str,
+                &kdf_options,
+                password,
+            )?
+        };
+
+        // Parse private key data
+        parse_private_key_data(&decrypted_data)
+    }
+
+    /// Read SSH string (4-byte length + data)
+    fn read_string(data: &[u8], cursor: &mut usize) -> FynxResult<Vec<u8>> {
+        let len = read_u32(data, cursor)? as usize;
+        if *cursor + len > data.len() {
+            return Err(FynxError::Protocol(
+                "String length exceeds data".to_string(),
+            ));
+        }
+        let result = data[*cursor..*cursor + len].to_vec();
+        *cursor += len;
+        Ok(result)
+    }
+
+    /// Read uint32 (big-endian)
+    fn read_u32(data: &[u8], cursor: &mut usize) -> FynxResult<u32> {
+        if *cursor + 4 > data.len() {
+            return Err(FynxError::Protocol("Not enough data for u32".to_string()));
+        }
+        let value = u32::from_be_bytes([
+            data[*cursor],
+            data[*cursor + 1],
+            data[*cursor + 2],
+            data[*cursor + 3],
+        ]);
+        *cursor += 4;
+        Ok(value)
+    }
+
+    /// Decrypt private key data
+    fn decrypt_private_key(
+        _encrypted: &[u8],
+        _cipher: &str,
+        _kdf: &str,
+        _kdf_options: &[u8],
+        _password: &str,
+    ) -> FynxResult<Vec<u8>> {
+        // TODO: Implement decryption
         Err(FynxError::Protocol(
-            "OpenSSH format not yet implemented".to_string(),
+            "Encrypted OpenSSH keys not yet supported".to_string(),
         ))
+    }
+
+    /// Parse decrypted private key data
+    fn parse_private_key_data(data: &[u8]) -> FynxResult<PrivateKey> {
+        let mut cursor = 0;
+
+        // Read check1 and check2 (should be equal for valid decryption)
+        let check1 = read_u32(data, &mut cursor)?;
+        let check2 = read_u32(data, &mut cursor)?;
+
+        if check1 != check2 {
+            return Err(FynxError::Protocol(
+                "Check values mismatch - wrong password or corrupted data".to_string(),
+            ));
+        }
+
+        // Read key type
+        let key_type = read_string(data, &mut cursor)?;
+        let key_type_str = std::str::from_utf8(&key_type)
+            .map_err(|_| FynxError::Protocol("Invalid UTF-8 in key type".to_string()))?;
+
+        match key_type_str {
+            "ssh-ed25519" => parse_ed25519_private(data, &mut cursor),
+            "ssh-rsa" => parse_rsa_private(data, &mut cursor),
+            "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" => {
+                parse_ecdsa_private(data, &mut cursor, key_type_str)
+            }
+            _ => Err(FynxError::Protocol(format!(
+                "Unsupported key type: {}",
+                key_type_str
+            ))),
+        }
+    }
+
+    /// Parse Ed25519 private key from OpenSSH format
+    fn parse_ed25519_private(data: &[u8], cursor: &mut usize) -> FynxResult<PrivateKey> {
+        // Read public key (32 bytes)
+        let _public_key = read_string(data, cursor)?;
+
+        // Read private key data (64 bytes: 32-byte seed + 32-byte public key)
+        let private_data = read_string(data, cursor)?;
+
+        if private_data.len() != 64 {
+            return Err(FynxError::Protocol(format!(
+                "Invalid Ed25519 private key length: expected 64, got {}",
+                private_data.len()
+            )));
+        }
+
+        // Extract seed (first 32 bytes)
+        let seed: [u8; 32] = private_data[..32]
+            .try_into()
+            .map_err(|_| FynxError::Protocol("Failed to extract Ed25519 seed".to_string()))?;
+
+        // Read comment (skip)
+        let _comment = read_string(data, cursor)?;
+
+        // Verify padding
+        verify_padding(data, cursor)?;
+
+        Ok(PrivateKey::Ed25519(Ed25519PrivateKey::from_seed(seed)))
+    }
+
+    /// Parse RSA private key from OpenSSH format
+    fn parse_rsa_private(_data: &[u8], _cursor: &mut usize) -> FynxResult<PrivateKey> {
+        // TODO: Implement RSA parsing
+        Err(FynxError::Protocol(
+            "RSA OpenSSH parsing not yet implemented".to_string(),
+        ))
+    }
+
+    /// Parse ECDSA private key from OpenSSH format
+    fn parse_ecdsa_private(
+        _data: &[u8],
+        _cursor: &mut usize,
+        _key_type: &str,
+    ) -> FynxResult<PrivateKey> {
+        // TODO: Implement ECDSA parsing
+        Err(FynxError::Protocol(
+            "ECDSA OpenSSH parsing not yet implemented".to_string(),
+        ))
+    }
+
+    /// Verify padding bytes (should be 1, 2, 3, 4, ...)
+    fn verify_padding(data: &[u8], cursor: &mut usize) -> FynxResult<()> {
+        let remaining = data.len() - *cursor;
+        for i in 0..remaining {
+            let expected = (i + 1) as u8;
+            if data[*cursor + i] != expected {
+                return Err(FynxError::Protocol(format!(
+                    "Invalid padding at position {}: expected {}, got {}",
+                    i,
+                    expected,
+                    data[*cursor + i]
+                )));
+            }
+        }
+        *cursor = data.len();
+        Ok(())
     }
 }
 
@@ -773,5 +1006,55 @@ Uw1fZcPukWWyTrT2T/LlvGE9dIqHqPVnBw==
         }
     }
 
-    // TODO: More tests for encrypted PEM, OpenSSH format, etc.
+    // OpenSSH format tests
+
+    #[test]
+    fn test_parse_openssh_ed25519_unencrypted() {
+        // Real OpenSSH Ed25519 private key (unencrypted, generated with ssh-keygen -t ed25519 -N "")
+        let pem = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACCJhmCw7G4IAD1sbsKHIjjfeEGWME7uI34ileqcwphJ5wAAAJjQ+1kp0PtZ
+KQAAAAtzc2gtZWQyNTUxOQAAACCJhmCw7G4IAD1sbsKHIjjfeEGWME7uI34ileqcwphJ5w
+AAAEC/oGDuQjC7vdzmqrKDI5WcsAb+X/nttm1biiGJYMMxyImGYLDsbggAPWxuwociON94
+QZYwTu4jfiKV6pzCmEnnAAAAEHRlc3RAZXhhbXBsZS5jb20BAgMEBQ==
+-----END OPENSSH PRIVATE KEY-----"#;
+
+        let key = PrivateKey::from_pem(pem, None);
+        assert!(
+            key.is_ok(),
+            "Failed to parse OpenSSH Ed25519 unencrypted: {:?}",
+            key
+        );
+
+        if let Ok(PrivateKey::Ed25519(_)) = key {
+            // Success
+        } else {
+            panic!("Expected Ed25519 key from OpenSSH format");
+        }
+    }
+
+    #[test]
+    fn test_parse_openssh_format_detection() {
+        // Test that OpenSSH format is properly detected
+        let openssh_pem = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmU=
+-----END OPENSSH PRIVATE KEY-----"#;
+
+        let result = PrivateKey::from_pem(openssh_pem, None);
+        // Should attempt OpenSSH parsing (may fail due to incomplete data, but should try)
+        assert!(result.is_err()); // Will fail because data is incomplete
+    }
+
+    #[test]
+    fn test_openssh_magic_validation() {
+        // Test that magic bytes are validated
+        let invalid_magic = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+aW52YWxpZC1tYWdpYy1ieXRlcw==
+-----END OPENSSH PRIVATE KEY-----"#;
+
+        let result = PrivateKey::from_pem(invalid_magic, None);
+        assert!(result.is_err(), "Should reject invalid magic bytes");
+    }
+
+    // TODO: More tests for encrypted OpenSSH, RSA/ECDSA OpenSSH format, etc.
 }
