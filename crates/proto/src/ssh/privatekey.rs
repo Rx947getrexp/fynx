@@ -780,16 +780,137 @@ mod openssh {
 
     /// Decrypt private key data
     fn decrypt_private_key(
-        _encrypted: &[u8],
-        _cipher: &str,
-        _kdf: &str,
-        _kdf_options: &[u8],
-        _password: &str,
+        encrypted: &[u8],
+        cipher: &str,
+        kdf: &str,
+        kdf_options: &[u8],
+        password: &str,
     ) -> FynxResult<Vec<u8>> {
-        // TODO: Implement decryption
-        Err(FynxError::Protocol(
-            "Encrypted OpenSSH keys not yet supported".to_string(),
-        ))
+        // Only bcrypt KDF is supported
+        if kdf != "bcrypt" {
+            return Err(FynxError::Protocol(format!(
+                "Unsupported KDF: {} (only bcrypt supported)",
+                kdf
+            )));
+        }
+
+        // Parse KDF options (salt + rounds)
+        let (salt, rounds) = parse_kdf_options(kdf_options)?;
+
+        // Determine key and IV size based on cipher
+        let (key_len, iv_len) = match cipher {
+            "aes128-cbc" | "aes128-ctr" => (16, 16),
+            "aes256-cbc" | "aes256-ctr" => (32, 16),
+            _ => {
+                return Err(FynxError::Protocol(format!(
+                    "Unsupported cipher: {}",
+                    cipher
+                )))
+            }
+        };
+
+        // Derive key and IV using bcrypt-pbkdf
+        let mut key_iv = vec![0u8; key_len + iv_len];
+        bcrypt_pbkdf::bcrypt_pbkdf(password.as_bytes(), &salt, rounds, &mut key_iv)
+            .map_err(|e| FynxError::Protocol(format!("bcrypt-pbkdf failed: {:?}", e)))?;
+
+        let key = &key_iv[..key_len];
+        let iv = &key_iv[key_len..];
+
+        // Decrypt based on cipher type
+        match cipher {
+            "aes128-cbc" | "aes256-cbc" => decrypt_aes_cbc(encrypted, key, iv),
+            "aes128-ctr" | "aes256-ctr" => decrypt_aes_ctr(encrypted, key, iv),
+            _ => Err(FynxError::Protocol(format!(
+                "Unsupported cipher: {}",
+                cipher
+            ))),
+        }
+    }
+
+    /// Parse KDF options to extract salt and rounds
+    fn parse_kdf_options(options: &[u8]) -> FynxResult<(Vec<u8>, u32)> {
+        let mut cursor = 0;
+
+        // Read salt
+        let salt = read_string(options, &mut cursor)?;
+
+        // Read rounds
+        let rounds = read_u32(options, &mut cursor)?;
+
+        Ok((salt, rounds))
+    }
+
+    /// Decrypt using AES-CBC
+    fn decrypt_aes_cbc(encrypted: &[u8], key: &[u8], iv: &[u8]) -> FynxResult<Vec<u8>> {
+        use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
+
+        match key.len() {
+            16 => {
+                type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+                let cipher = Aes128CbcDec::new_from_slices(key, iv).map_err(|e| {
+                    FynxError::Protocol(format!("Failed to create cipher: {:?}", e))
+                })?;
+
+                let mut buffer = encrypted.to_vec();
+                cipher
+                    .decrypt_padded_mut::<NoPadding>(&mut buffer)
+                    .map_err(|e| FynxError::Protocol(format!("Decryption failed: {:?}", e)))?;
+
+                Ok(buffer)
+            }
+            32 => {
+                type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+                let cipher = Aes256CbcDec::new_from_slices(key, iv).map_err(|e| {
+                    FynxError::Protocol(format!("Failed to create cipher: {:?}", e))
+                })?;
+
+                let mut buffer = encrypted.to_vec();
+                cipher
+                    .decrypt_padded_mut::<NoPadding>(&mut buffer)
+                    .map_err(|e| FynxError::Protocol(format!("Decryption failed: {:?}", e)))?;
+
+                Ok(buffer)
+            }
+            _ => Err(FynxError::Protocol(format!(
+                "Invalid key length: {}",
+                key.len()
+            ))),
+        }
+    }
+
+    /// Decrypt using AES-CTR
+    fn decrypt_aes_ctr(encrypted: &[u8], key: &[u8], iv: &[u8]) -> FynxResult<Vec<u8>> {
+        use aes::cipher::{KeyIvInit, StreamCipher};
+
+        match key.len() {
+            16 => {
+                type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
+                let mut cipher = Aes128Ctr::new_from_slices(key, iv).map_err(|e| {
+                    FynxError::Protocol(format!("Failed to create cipher: {:?}", e))
+                })?;
+
+                let mut buffer = encrypted.to_vec();
+                cipher.apply_keystream(&mut buffer);
+
+                Ok(buffer)
+            }
+            32 => {
+                type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
+                let mut cipher = Aes256Ctr::new_from_slices(key, iv).map_err(|e| {
+                    FynxError::Protocol(format!("Failed to create cipher: {:?}", e))
+                })?;
+
+                let mut buffer = encrypted.to_vec();
+                cipher.apply_keystream(&mut buffer);
+
+                Ok(buffer)
+            }
+            _ => Err(FynxError::Protocol(format!(
+                "Invalid key length: {}",
+                key.len()
+            ))),
+        }
     }
 
     /// Parse decrypted private key data
@@ -1056,5 +1177,50 @@ aW52YWxpZC1tYWdpYy1ieXRlcw==
         assert!(result.is_err(), "Should reject invalid magic bytes");
     }
 
-    // TODO: More tests for encrypted OpenSSH, RSA/ECDSA OpenSSH format, etc.
+    #[test]
+    fn test_parse_openssh_ed25519_encrypted() {
+        // Real encrypted OpenSSH Ed25519 key (generated with ssh-keygen -t ed25519 -N "testpassword")
+        let pem = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAeZdXLu6
+fhCIjjC0KoaJcZAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIBRanDK33/M2A9M0
+Lc/TQ/pF5kfd8rplxF34cupZF1gDAAAAoOFdUBYZrgIZ0CtuSBehSrcQkwXQQcLlIHRFoe
+Qz4SJMD8PbGTNYvbIFqXBIhObSi9PrY/EENhVGdK/Z9oLUaT8iJdoSWIylHlC7Mhtus0FV
+iulMrvo+csmBnppKvNWL8KrxKXavrIpsF0Lvx9vY9+G+m9vekydtEMVlrCaFR0PIvTpYZt
++wdf4byCgl4QhCq2Y7v/IrWidxbDZX5G80Wp0=
+-----END OPENSSH PRIVATE KEY-----"#;
+
+        let key = PrivateKey::from_pem(pem, Some("testpassword"));
+        assert!(
+            key.is_ok(),
+            "Failed to parse encrypted OpenSSH Ed25519: {:?}",
+            key
+        );
+
+        if let Ok(PrivateKey::Ed25519(_)) = key {
+            // Success
+        } else {
+            panic!("Expected Ed25519 key from encrypted OpenSSH format");
+        }
+    }
+
+    #[test]
+    fn test_parse_openssh_wrong_password() {
+        // Test that wrong password is properly rejected
+        let pem = r#"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABAeZdXLu6
+fhCIjjC0KoaJcZAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIBRanDK33/M2A9M0
+Lc/TQ/pF5kfd8rplxF34cupZF1gDAAAAoOFdUBYZrgIZ0CtuSBehSrcQkwXQQcLlIHRFoe
+Qz4SJMD8PbGTNYvbIFqXBIhObSi9PrY/EENhVGdK/Z9oLUaT8iJdoSWIylHlC7Mhtus0FV
+iulMrvo+csmBnppKvNWL8KrxKXavrIpsF0Lvx9vY9+G+m9vekydtEMVlrCaFR0PIvTpYZt
++wdf4byCgl4QhCq2Y7v/IrWidxbDZX5G80Wp0=
+-----END OPENSSH PRIVATE KEY-----"#;
+
+        let result = PrivateKey::from_pem(pem, Some("wrongpassword"));
+        assert!(
+            result.is_err(),
+            "Should reject wrong password (check1 != check2)"
+        );
+    }
+
+    // TODO: More tests for RSA/ECDSA OpenSSH format, etc.
 }
