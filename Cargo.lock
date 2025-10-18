@@ -628,6 +628,7 @@ dependencies = [
  "hmac",
  "md-5",
  "num-bigint",
+ "num-integer",
  "once_cell",
  "p256",
  "p384",
