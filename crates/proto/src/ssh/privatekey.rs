@@ -136,6 +136,53 @@ impl PublicKey {
             },
         }
     }
+
+    /// Calculate MD5 fingerprint (legacy format).
+    ///
+    /// Returns fingerprint in format: `MD5:xx:xx:...:xx`
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use fynx_proto::ssh::privatekey::PublicKey;
+    /// let public_key = PublicKey::Ed25519([0u8; 32]);
+    /// let fingerprint = public_key.fingerprint_md5();
+    /// println!("Fingerprint: {}", fingerprint);
+    /// ```
+    pub fn fingerprint_md5(&self) -> String {
+        use md5::{Digest, Md5};
+
+        let ssh_bytes = self.to_ssh_bytes();
+        let hash = Md5::digest(&ssh_bytes);
+
+        // Format as MD5:xx:xx:...:xx
+        let hex_pairs: Vec<String> = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        format!("MD5:{}", hex_pairs.join(":"))
+    }
+
+    /// Calculate SHA256 fingerprint (modern format).
+    ///
+    /// Returns fingerprint in format: `SHA256:base64`
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use fynx_proto::ssh::privatekey::PublicKey;
+    /// let public_key = PublicKey::Ed25519([0u8; 32]);
+    /// let fingerprint = public_key.fingerprint_sha256();
+    /// println!("Fingerprint: {}", fingerprint);
+    /// ```
+    pub fn fingerprint_sha256(&self) -> String {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        let ssh_bytes = self.to_ssh_bytes();
+        let hash = Sha256::digest(&ssh_bytes);
+
+        // Format as SHA256:base64 (without padding)
+        let base64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&hash);
+        format!("SHA256:{}", base64)
+    }
 }
 
 /// Helper function to write SSH string format (4-byte length + data).
@@ -1340,6 +1387,71 @@ iulMrvo+csmBnppKvNWL8KrxKXavrIpsF0Lvx9vY9+G+m9vekydtEMVlrCaFR0PIvTpYZt
             public_key: vec![0; 65],
         };
         assert_eq!(ecdsa.algorithm(), "ecdsa-sha2-nistp256");
+    }
+
+    #[test]
+    fn test_fingerprint_md5() {
+        let public_key = PublicKey::Ed25519([1u8; 32]);
+        let fingerprint = public_key.fingerprint_md5();
+
+        // Should start with "MD5:"
+        assert!(fingerprint.starts_with("MD5:"));
+
+        // Should have correct format: MD5:xx:xx:...:xx (16 hex pairs)
+        let parts: Vec<&str> = fingerprint.split(':').collect();
+        assert_eq!(parts.len(), 17); // "MD5" + 16 hex pairs
+        assert_eq!(parts[0], "MD5");
+
+        // Each hex pair should be valid
+        for i in 1..parts.len() {
+            assert_eq!(parts[i].len(), 2);
+            assert!(parts[i].chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn test_fingerprint_sha256() {
+        let public_key = PublicKey::Ed25519([1u8; 32]);
+        let fingerprint = public_key.fingerprint_sha256();
+
+        // Should start with "SHA256:"
+        assert!(fingerprint.starts_with("SHA256:"));
+
+        // Extract base64 part
+        let base64_part = &fingerprint[7..]; // Skip "SHA256:"
+        assert!(!base64_part.is_empty());
+
+        // Should be valid base64 (no padding for SHA256)
+        assert!(!base64_part.contains('='));
+        assert!(base64_part
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '+' || c == '/'));
+    }
+
+    #[test]
+    fn test_fingerprint_consistency() {
+        let public_key = PublicKey::Ed25519([42u8; 32]);
+
+        // Same key should produce same fingerprint
+        let fp1 = public_key.fingerprint_sha256();
+        let fp2 = public_key.fingerprint_sha256();
+        assert_eq!(fp1, fp2);
+
+        let fp_md5_1 = public_key.fingerprint_md5();
+        let fp_md5_2 = public_key.fingerprint_md5();
+        assert_eq!(fp_md5_1, fp_md5_2);
+    }
+
+    #[test]
+    fn test_different_keys_different_fingerprints() {
+        let key1 = PublicKey::Ed25519([1u8; 32]);
+        let key2 = PublicKey::Ed25519([2u8; 32]);
+
+        let fp1 = key1.fingerprint_sha256();
+        let fp2 = key2.fingerprint_sha256();
+
+        // Different keys should have different fingerprints
+        assert_ne!(fp1, fp2);
     }
 
     // TODO: More tests for RSA/ECDSA OpenSSH format, etc.
