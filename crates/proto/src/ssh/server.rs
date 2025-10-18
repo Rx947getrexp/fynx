@@ -30,12 +30,16 @@
 //! # }
 //! ```
 
-use crate::ssh::auth::{AuthMethod, AuthRequest};
+use crate::ssh::auth::{construct_signature_data, AuthMethod, AuthPkOk, AuthRequest};
+use crate::ssh::authorized_keys::AuthorizedKeysFile;
 use crate::ssh::connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelOpen, ChannelOpenConfirmation, ChannelRequest,
     ChannelRequestType, ChannelSuccess,
 };
-use crate::ssh::hostkey::{Ed25519HostKey, HostKey};
+use crate::ssh::hostkey::{
+    EcdsaP256HostKey, EcdsaP384HostKey, EcdsaP521HostKey, Ed25519HostKey, HostKey,
+    RsaSha2_256HostKey, RsaSha2_512HostKey,
+};
 use crate::ssh::kex::{negotiate_algorithm, KexInit, NewKeys};
 use crate::ssh::kex_dh::Curve25519Exchange;
 use crate::ssh::message::MessageType;
@@ -44,6 +48,7 @@ use crate::ssh::transport::{State, TransportConfig, TransportState};
 use crate::ssh::version::Version;
 use fynx_platform::{FynxError, FynxResult};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -281,6 +286,7 @@ impl SshServer {
             server_version: String::new(),
             client_kexinit_payload: Vec::new(),
             server_kexinit_payload: Vec::new(),
+            session_id: None,
         };
 
         // Perform version exchange
@@ -328,6 +334,9 @@ pub struct SshSession {
     client_kexinit_payload: Vec<u8>,
     /// Server KEXINIT payload (for exchange hash computation).
     server_kexinit_payload: Vec<u8>,
+    /// Session identifier (exchange hash from first key exchange).
+    /// Used for public key authentication signatures (RFC 4252 Section 7).
+    session_id: Option<Vec<u8>>,
 }
 
 /// Channel state.
@@ -338,6 +347,16 @@ struct ChannelState {
     _remote_id: u32,
     /// Window size.
     _window_size: u32,
+}
+
+/// Public key authentication result.
+enum PublicKeyAuthResult {
+    /// Server accepts the key (send SSH_MSG_USERAUTH_PK_OK).
+    PkOk,
+    /// Authentication successful.
+    Success,
+    /// Authentication failed.
+    Failure,
 }
 
 impl SshSession {
@@ -670,7 +689,226 @@ impl SshSession {
         // Install encryption params into transport state
         self.transport.set_encryption_params(enc_params);
 
+        // Store session_id for public key authentication (RFC 4253 Section 7.2)
+        // Session ID is the exchange hash H from the first key exchange
+        if self.session_id.is_none() {
+            self.session_id = Some(session_id);
+        }
+
         Ok(())
+    }
+
+    /// Handles public key authentication (RFC 4252 Section 7).
+    ///
+    /// This implements both the try phase (query if key is acceptable) and
+    /// the sign phase (verify signature).
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - User attempting to authenticate
+    /// * `algorithm` - Public key algorithm name
+    /// * `public_key` - Public key blob (SSH wire format)
+    /// * `signature` - Optional signature blob (None for try phase)
+    ///
+    /// # Returns
+    ///
+    /// Authentication result
+    async fn handle_publickey_auth(
+        &self,
+        username: &str,
+        algorithm: &str,
+        public_key: &[u8],
+        signature: Option<&[u8]>,
+    ) -> FynxResult<PublicKeyAuthResult> {
+        // Load user's authorized_keys file
+        let auth_keys_path = Self::get_authorized_keys_path(username);
+        let auth_keys_file = match AuthorizedKeysFile::from_file(&auth_keys_path) {
+            Ok(file) => file,
+            Err(_) => {
+                // authorized_keys file not found or unreadable
+                return Ok(PublicKeyAuthResult::Failure);
+            }
+        };
+
+        // Find the public key in authorized_keys
+        let _authorized_key = match auth_keys_file.find_key(algorithm, public_key) {
+            Some(key) => key,
+            None => {
+                // Public key not found in authorized_keys
+                return Ok(PublicKeyAuthResult::Failure);
+            }
+        };
+
+        // Try phase: client is querying if this key is acceptable
+        if signature.is_none() {
+            return Ok(PublicKeyAuthResult::PkOk);
+        }
+
+        // Sign phase: verify the signature
+        let signature_blob = signature.unwrap();
+
+        // Get session_id (must have completed key exchange)
+        let session_id = self
+            .session_id
+            .as_ref()
+            .ok_or_else(|| {
+                FynxError::Protocol(
+                    "No session ID available (key exchange not completed)".to_string(),
+                )
+            })?;
+
+        // Construct signature data (RFC 4252 Section 7)
+        let signature_data = construct_signature_data(
+            session_id,
+            username,
+            "ssh-connection",
+            algorithm,
+            public_key,
+        );
+
+        // Verify signature based on algorithm
+        let verified = self.verify_signature(
+            algorithm,
+            public_key,
+            signature_blob,
+            &signature_data,
+        )?;
+
+        if verified {
+            Ok(PublicKeyAuthResult::Success)
+        } else {
+            Ok(PublicKeyAuthResult::Failure)
+        }
+    }
+
+    /// Verifies a public key signature.
+    ///
+    /// # Arguments
+    ///
+    /// * `algorithm` - Public key algorithm name
+    /// * `public_key_blob` - Public key in SSH wire format
+    /// * `signature_blob` - Signature in SSH wire format
+    /// * `signed_data` - Data that was signed
+    ///
+    /// # Returns
+    ///
+    /// `true` if signature is valid, `false` otherwise
+    fn verify_signature(
+        &self,
+        algorithm: &str,
+        public_key_blob: &[u8],
+        signature_blob: &[u8],
+        signed_data: &[u8],
+    ) -> FynxResult<bool> {
+        // Parse signature blob: string algorithm_name || string signature_data
+        if signature_blob.len() < 4 {
+            return Ok(false);
+        }
+
+        let sig_alg_len = u32::from_be_bytes([
+            signature_blob[0],
+            signature_blob[1],
+            signature_blob[2],
+            signature_blob[3],
+        ]) as usize;
+
+        if signature_blob.len() < 4 + sig_alg_len + 4 {
+            return Ok(false);
+        }
+
+        let mut offset = 4 + sig_alg_len;
+
+        // Read signature data
+        let sig_data_len = u32::from_be_bytes([
+            signature_blob[offset],
+            signature_blob[offset + 1],
+            signature_blob[offset + 2],
+            signature_blob[offset + 3],
+        ]) as usize;
+        offset += 4;
+
+        if offset + sig_data_len > signature_blob.len() {
+            return Ok(false);
+        }
+
+        let signature_data = &signature_blob[offset..offset + sig_data_len];
+
+        // Extract public key from blob (skip algorithm name, get key data)
+        if public_key_blob.len() < 4 {
+            return Ok(false);
+        }
+
+        let key_alg_len = u32::from_be_bytes([
+            public_key_blob[0],
+            public_key_blob[1],
+            public_key_blob[2],
+            public_key_blob[3],
+        ]) as usize;
+
+        let key_offset = 4 + key_alg_len;
+        if key_offset + 4 > public_key_blob.len() {
+            return Ok(false);
+        }
+
+        let key_data_len = u32::from_be_bytes([
+            public_key_blob[key_offset],
+            public_key_blob[key_offset + 1],
+            public_key_blob[key_offset + 2],
+            public_key_blob[key_offset + 3],
+        ]) as usize;
+
+        let key_data_offset = key_offset + 4;
+        if key_data_offset + key_data_len > public_key_blob.len() {
+            return Ok(false);
+        }
+
+        let key_data = &public_key_blob[key_data_offset..key_data_offset + key_data_len];
+
+        // Verify signature based on algorithm
+        match algorithm {
+            "ssh-ed25519" => Ed25519HostKey::verify(key_data, signed_data, signature_data),
+            "rsa-sha2-256" => {
+                // TODO: Implement RSA signature verification
+                Ok(false)
+            }
+            "rsa-sha2-512" => {
+                // TODO: Implement RSA signature verification
+                Ok(false)
+            }
+            "ecdsa-sha2-nistp256" => {
+                // TODO: Implement ECDSA P-256 signature verification
+                Ok(false)
+            }
+            "ecdsa-sha2-nistp384" => {
+                // TODO: Implement ECDSA P-384 signature verification
+                Ok(false)
+            }
+            "ecdsa-sha2-nistp521" => {
+                // TODO: Implement ECDSA P-521 signature verification
+                Ok(false)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Gets the authorized_keys file path for a user.
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - Username to get authorized_keys for
+    ///
+    /// # Returns
+    ///
+    /// Path to the user's authorized_keys file
+    fn get_authorized_keys_path(username: &str) -> PathBuf {
+        #[cfg(unix)]
+        {
+            PathBuf::from(format!("/home/{}/.ssh/authorized_keys", username))
+        }
+        #[cfg(not(unix))]
+        {
+            PathBuf::from(format!("C:\\Users\\{}/.ssh/authorized_keys", username))
+        }
     }
 
     /// Handles authentication requests.
@@ -700,38 +938,89 @@ impl SshSession {
 
                     let auth_request = AuthRequest::from_bytes(packet.payload())?;
 
-                    // Verify credentials
-                    let success = match auth_request.method() {
+                    // Handle authentication based on method
+                    match auth_request.method() {
                         AuthMethod::Password(password) => {
-                            (self.auth_callback)(auth_request.user_name(), password)
-                        }
-                        AuthMethod::None => false,
-                        AuthMethod::PublicKey { .. } => {
-                            // Public key auth not yet implemented
-                            false
-                        }
-                    };
+                            let success =
+                                (self.auth_callback)(auth_request.user_name(), password);
 
-                    if success {
-                        // Send USERAUTH_SUCCESS
-                        let success_msg = vec![MessageType::UserauthSuccess as u8];
-                        self.send_packet(&success_msg).await?;
-                        self.authenticated_user = Some(auth_request.user_name().to_string());
-                        return Ok(());
-                    } else {
-                        // Send USERAUTH_FAILURE
-                        let mut failure_msg = vec![MessageType::UserauthFailure as u8];
-                        let methods = b"password";
-                        failure_msg.extend_from_slice(&(methods.len() as u32).to_be_bytes());
-                        failure_msg.extend_from_slice(methods);
-                        failure_msg.push(0); // partial_success = false
-                        self.send_packet(&failure_msg).await?;
-
-                        if attempts >= self.config.max_auth_attempts {
-                            return Err(FynxError::Protocol(
-                                "Max authentication attempts exceeded".to_string(),
-                            ));
+                            if success {
+                                // Send USERAUTH_SUCCESS
+                                let success_msg = vec![MessageType::UserauthSuccess as u8];
+                                self.send_packet(&success_msg).await?;
+                                self.authenticated_user =
+                                    Some(auth_request.user_name().to_string());
+                                return Ok(());
+                            } else {
+                                // Send USERAUTH_FAILURE
+                                let mut failure_msg = vec![MessageType::UserauthFailure as u8];
+                                let methods = b"password,publickey";
+                                failure_msg
+                                    .extend_from_slice(&(methods.len() as u32).to_be_bytes());
+                                failure_msg.extend_from_slice(methods);
+                                failure_msg.push(0); // partial_success = false
+                                self.send_packet(&failure_msg).await?;
+                            }
                         }
+                        AuthMethod::None => {
+                            // Send USERAUTH_FAILURE for "none" method
+                            let mut failure_msg = vec![MessageType::UserauthFailure as u8];
+                            let methods = b"password,publickey";
+                            failure_msg.extend_from_slice(&(methods.len() as u32).to_be_bytes());
+                            failure_msg.extend_from_slice(methods);
+                            failure_msg.push(0); // partial_success = false
+                            self.send_packet(&failure_msg).await?;
+                        }
+                        AuthMethod::PublicKey {
+                            algorithm,
+                            public_key,
+                            signature,
+                        } => {
+                            // Public key authentication (RFC 4252 Section 7)
+                            let auth_result = self
+                                .handle_publickey_auth(
+                                    auth_request.user_name(),
+                                    algorithm,
+                                    public_key,
+                                    signature.as_deref(),
+                                )
+                                .await?;
+
+                            match auth_result {
+                                PublicKeyAuthResult::PkOk => {
+                                    // Try phase: send SSH_MSG_USERAUTH_PK_OK
+                                    let pk_ok = AuthPkOk::new(algorithm.clone(), public_key.clone());
+                                    self.send_packet(&pk_ok.to_bytes()).await?;
+                                    // Don't increment attempts for try phase
+                                    attempts -= 1;
+                                }
+                                PublicKeyAuthResult::Success => {
+                                    // Sign phase: authentication succeeded
+                                    let success_msg = vec![MessageType::UserauthSuccess as u8];
+                                    self.send_packet(&success_msg).await?;
+                                    self.authenticated_user =
+                                        Some(auth_request.user_name().to_string());
+                                    return Ok(());
+                                }
+                                PublicKeyAuthResult::Failure => {
+                                    // Authentication failed
+                                    let mut failure_msg = vec![MessageType::UserauthFailure as u8];
+                                    let methods = b"password,publickey";
+                                    failure_msg
+                                        .extend_from_slice(&(methods.len() as u32).to_be_bytes());
+                                    failure_msg.extend_from_slice(methods);
+                                    failure_msg.push(0); // partial_success = false
+                                    self.send_packet(&failure_msg).await?;
+                                }
+                            }
+                        }
+                    }
+
+                    // Check max attempts
+                    if attempts >= self.config.max_auth_attempts {
+                        return Err(FynxError::Protocol(
+                            "Max authentication attempts exceeded".to_string(),
+                        ));
                     }
                 }
                 _ => {
