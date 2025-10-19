@@ -26,6 +26,7 @@ async-trait = "0.1"
 
 # Crypto
 ring = "0.17"
+sha1 = "0.10"
 sha2 = "0.10"
 hmac = "0.12"
 x25519-dalek = "2.0"

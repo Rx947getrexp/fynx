@@ -55,6 +55,7 @@ pub mod crypto;
 pub mod hostkey;
 pub mod kex;
 pub mod kex_dh;
+pub mod known_hosts;
 pub mod message;
 pub mod packet;
 pub mod privatekey;
@@ -82,6 +83,7 @@ pub use hostkey::{
 };
 pub use kex::{negotiate_algorithm, KexInit, NewKeys};
 pub use kex_dh::{derive_key, Curve25519Exchange, DhGroup14Exchange};
+pub use known_hosts::{HostKeyStatus, KnownHost, KnownHostsFile, StrictHostKeyChecking};
 pub use message::MessageType;
 pub use packet::Packet;
 pub use privatekey::{
