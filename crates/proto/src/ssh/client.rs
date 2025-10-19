@@ -436,7 +436,10 @@ impl SshClient {
                 // Call user prompt callback
                 if let Some(ref callback) = self.config.user_prompt_callback {
                     if callback(hostname, port, key_type, host_key_data) {
-                        // User accepted - we should add to known_hosts here in Task 4
+                        // User accepted - add to known_hosts
+                        let mut known_hosts = KnownHostsFile::from_file(&known_hosts_path)?;
+                        known_hosts.add_host(hostname, port, key_type, host_key_data)?;
+                        known_hosts.save()?;
                         Ok(())
                     } else {
                         Err(FynxError::Protocol(format!(
@@ -451,7 +454,10 @@ impl SshClient {
                 }
             }
             (HostKeyStatus::Unknown, StrictHostKeyChecking::AcceptNew) => {
-                // Accept new hosts automatically - we should add to known_hosts here in Task 4
+                // Accept new hosts automatically - add to known_hosts
+                let mut known_hosts = KnownHostsFile::from_file(&known_hosts_path)?;
+                known_hosts.add_host(hostname, port, key_type, host_key_data)?;
+                known_hosts.save()?;
                 Ok(())
             }
             (HostKeyStatus::Unknown, StrictHostKeyChecking::No) => {

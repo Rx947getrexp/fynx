@@ -447,6 +447,163 @@ impl KnownHostsFile {
         // No matching entry found
         HostKeyStatus::Unknown
     }
+
+    /// Adds a new host with its public key to the known_hosts file.
+    ///
+    /// # Arguments
+    ///
+    /// * `hostname` - Hostname (will be formatted with port if not 22)
+    /// * `port` - Port number (default 22)
+    /// * `key_type` - Key algorithm name (e.g., "ssh-ed25519")
+    /// * `key_data` - Public key data in SSH wire format
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use fynx_proto::ssh::known_hosts::KnownHostsFile;
+    ///
+    /// let mut known_hosts = KnownHostsFile::new("/tmp/known_hosts");
+    /// let key_data = vec![0u8; 32]; // Example key data
+    /// known_hosts.add_host("example.com", 22, "ssh-ed25519", &key_data).unwrap();
+    /// ```
+    pub fn add_host(
+        &mut self,
+        hostname: &str,
+        port: u16,
+        key_type: &str,
+        key_data: &[u8],
+    ) -> FynxResult<()> {
+        // Format hostname with port if non-standard
+        let hostname_pattern = if port == 22 {
+            hostname.to_string()
+        } else {
+            format!("[{}]:{}", hostname, port)
+        };
+
+        // Encode key data as base64
+        let base64_key = base64::engine::general_purpose::STANDARD.encode(key_data);
+
+        // Create KnownHost entry manually (since parse_line expects a full line)
+        let entry = KnownHost {
+            hostname_pattern: hostname_pattern.clone(),
+            key_type: key_type.to_string(),
+            key_data: key_data.to_vec(),
+            comment: String::new(),
+        };
+
+        self.entries.push(entry);
+        Ok(())
+    }
+
+    /// Removes a host from the known_hosts file.
+    ///
+    /// Removes all entries matching the given hostname and port.
+    ///
+    /// # Returns
+    ///
+    /// Number of entries removed.
+    pub fn remove_host(&mut self, hostname: &str, port: u16) -> FynxResult<usize> {
+        let initial_count = self.entries.len();
+
+        self.entries.retain(|entry| {
+            if let Ok(matches) = entry.matches(hostname, port) {
+                !matches
+            } else {
+                true // Keep entries with errors
+            }
+        });
+
+        Ok(initial_count - self.entries.len())
+    }
+
+    /// Updates the host key for a given hostname/port.
+    ///
+    /// Removes all existing entries for the host and adds a new one.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use fynx_proto::ssh::known_hosts::KnownHostsFile;
+    ///
+    /// let mut known_hosts = KnownHostsFile::new("/tmp/known_hosts");
+    /// let new_key_data = vec![0u8; 32];
+    /// known_hosts.update_host("example.com", 22, "ssh-ed25519", &new_key_data).unwrap();
+    /// ```
+    pub fn update_host(
+        &mut self,
+        hostname: &str,
+        port: u16,
+        key_type: &str,
+        key_data: &[u8],
+    ) -> FynxResult<()> {
+        // Remove old entries
+        self.remove_host(hostname, port)?;
+
+        // Add new entry
+        self.add_host(hostname, port, key_type, key_data)?;
+
+        Ok(())
+    }
+
+    /// Saves the known_hosts file to disk.
+    ///
+    /// Writes all entries in standard OpenSSH known_hosts format.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use fynx_proto::ssh::known_hosts::KnownHostsFile;
+    ///
+    /// let mut known_hosts = KnownHostsFile::new("/home/user/.ssh/known_hosts");
+    /// known_hosts.add_host("example.com", 22, "ssh-ed25519", &vec![0u8; 32]).unwrap();
+    /// known_hosts.save().unwrap();
+    /// ```
+    pub fn save(&self) -> FynxResult<()> {
+        use std::fs;
+        use std::io::Write;
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = self.path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).map_err(FynxError::Io)?;
+            }
+        }
+
+        // Build the file content
+        let mut content = String::new();
+        for entry in &self.entries {
+            let base64_key = base64::engine::general_purpose::STANDARD.encode(entry.key_data());
+            let line = if entry.comment().is_empty() {
+                format!(
+                    "{} {} {}\n",
+                    entry.hostname_pattern(),
+                    entry.key_type(),
+                    base64_key
+                )
+            } else {
+                format!(
+                    "{} {} {} {}\n",
+                    entry.hostname_pattern(),
+                    entry.key_type(),
+                    base64_key,
+                    entry.comment()
+                )
+            };
+            content.push_str(&line);
+        }
+
+        // Write to file (atomic write via temp file)
+        let temp_path = self.path.with_extension("tmp");
+        let mut file = fs::File::create(&temp_path).map_err(FynxError::Io)?;
+        file.write_all(content.as_bytes()).map_err(FynxError::Io)?;
+        file.sync_all().map_err(FynxError::Io)?;
+        drop(file);
+
+        // Atomic rename
+        fs::rename(&temp_path, &self.path).map_err(FynxError::Io)?;
+
+        Ok(())
+    }
 }
 
 /// Host key verification status.
@@ -574,5 +731,142 @@ example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRanDK33/M2A9M0Lc/TQ/pF5kfd8rpl
 
         let status = file.verify_host_key("example.com", 22, "ssh-ed25519", &different_key);
         assert!(matches!(status, HostKeyStatus::Changed { .. }));
+    }
+
+    #[test]
+    fn test_add_host() {
+        let mut file = KnownHostsFile::new("/tmp/test_known_hosts");
+        let key_data = vec![1, 2, 3, 4, 5];
+
+        // Add a host on standard port
+        file.add_host("example.com", 22, "ssh-ed25519", &key_data)
+            .unwrap();
+        assert_eq!(file.entries().len(), 1);
+        assert_eq!(file.entries()[0].hostname_pattern(), "example.com");
+        assert_eq!(file.entries()[0].key_type(), "ssh-ed25519");
+        assert_eq!(file.entries()[0].key_data(), &key_data);
+
+        // Add a host on non-standard port
+        file.add_host("other.com", 2222, "ssh-rsa", &key_data)
+            .unwrap();
+        assert_eq!(file.entries().len(), 2);
+        assert_eq!(file.entries()[1].hostname_pattern(), "[other.com]:2222");
+    }
+
+    #[test]
+    fn test_remove_host() {
+        let mut file = KnownHostsFile::new("/tmp/test_known_hosts");
+        let key_data = vec![1, 2, 3, 4];
+
+        // Add two hosts
+        file.add_host("example.com", 22, "ssh-ed25519", &key_data)
+            .unwrap();
+        file.add_host("other.com", 22, "ssh-ed25519", &key_data)
+            .unwrap();
+        assert_eq!(file.entries().len(), 2);
+
+        // Remove one host
+        let removed = file.remove_host("example.com", 22).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(file.entries().len(), 1);
+        assert_eq!(file.entries()[0].hostname_pattern(), "other.com");
+
+        // Remove non-existent host
+        let removed = file.remove_host("nonexistent.com", 22).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(file.entries().len(), 1);
+    }
+
+    #[test]
+    fn test_update_host() {
+        let mut file = KnownHostsFile::new("/tmp/test_known_hosts");
+        let old_key = vec![1, 2, 3, 4];
+        let new_key = vec![5, 6, 7, 8];
+
+        // Add a host
+        file.add_host("example.com", 22, "ssh-ed25519", &old_key)
+            .unwrap();
+        assert_eq!(file.entries().len(), 1);
+        assert_eq!(file.entries()[0].key_data(), &old_key);
+
+        // Update the host key
+        file.update_host("example.com", 22, "ssh-ed25519", &new_key)
+            .unwrap();
+        assert_eq!(file.entries().len(), 1);
+        assert_eq!(file.entries()[0].key_data(), &new_key);
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        use std::fs;
+        use std::io::Write;
+
+        // Create a temporary directory
+        let temp_dir = std::env::temp_dir().join("fynx_test_known_hosts");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let file_path = temp_dir.join("known_hosts_test");
+
+        // Create and populate a known_hosts file
+        let mut file = KnownHostsFile::new(&file_path);
+        let key_data1 = vec![1, 2, 3, 4];
+        let key_data2 = vec![5, 6, 7, 8];
+
+        file.add_host("example.com", 22, "ssh-ed25519", &key_data1)
+            .unwrap();
+        file.add_host("other.com", 2222, "ssh-rsa", &key_data2)
+            .unwrap();
+
+        // Save to disk
+        file.save().unwrap();
+
+        // Load from disk
+        let loaded = KnownHostsFile::from_file(&file_path).unwrap();
+        assert_eq!(loaded.entries().len(), 2);
+        assert_eq!(loaded.entries()[0].hostname_pattern(), "example.com");
+        assert_eq!(loaded.entries()[0].key_data(), &key_data1);
+        assert_eq!(loaded.entries()[1].hostname_pattern(), "[other.com]:2222");
+        assert_eq!(loaded.entries()[1].key_data(), &key_data2);
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+        fs::remove_dir(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_save_preserves_comments() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join("fynx_test_known_hosts_comments");
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let file_path = temp_dir.join("known_hosts_comments");
+
+        // Create a file with comments via manual entry construction
+        let mut file = KnownHostsFile::new(&file_path);
+        let key_data = vec![1, 2, 3, 4];
+
+        // Add entry without comment
+        file.add_host("example.com", 22, "ssh-ed25519", &key_data)
+            .unwrap();
+
+        // Add entry with comment (by parsing a line)
+        let line_with_comment =
+            "other.com ssh-ed25519 AQIDBA== user@host";
+        if let Ok(entry) = KnownHost::parse_line(line_with_comment) {
+            file.add_entry(entry);
+        }
+
+        file.save().unwrap();
+
+        // Load and verify
+        let loaded = KnownHostsFile::from_file(&file_path).unwrap();
+        assert_eq!(loaded.entries().len(), 2);
+        assert_eq!(loaded.entries()[0].comment(), "");
+        assert_eq!(loaded.entries()[1].comment(), "user@host");
+
+        // Cleanup
+        fs::remove_file(&file_path).ok();
+        fs::remove_dir(&temp_dir).ok();
     }
 }
