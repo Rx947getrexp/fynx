@@ -19,7 +19,7 @@ ipsec = []
 tty-password = ["rpassword"]
 
 [dependencies]
-fynx-platform = { path = "../platform" }
+fynx-platform = "0.1.0-alpha.1"
 
 # Async runtime
 tokio = { version = "1.35", features = ["net", "io-util", "sync", "time", "rt"] }

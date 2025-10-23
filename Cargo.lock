@@ -578,14 +578,14 @@ checksum = "05f29059c0c2090612e8d742178b0580d2dc940c837851ad723096f87af6663e"
 name = "fynx-detect"
 version = "0.1.0"
 dependencies = [
- "fynx-platform",
+ "fynx-platform 0.1.0-alpha.1",
 ]
 
 [[package]]
 name = "fynx-exploit"
 version = "0.1.0"
 dependencies = [
- "fynx-platform",
+ "fynx-platform 0.1.0-alpha.1",
 ]
 
 [[package]]
@@ -600,10 +600,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fynx-platform"
+version = "0.1.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaee126630a09509ca3bb03561cf232f2f8111423f249fdb2950df04203b48c"
+dependencies = [
+ "async-trait",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "fynx-protect"
 version = "0.1.0"
 dependencies = [
- "fynx-platform",
+ "fynx-platform 0.1.0-alpha.1",
 ]
 
 [[package]]
@@ -622,7 +633,7 @@ dependencies = [
  "ecdsa",
  "ed25519-dalek",
  "flate2",
- "fynx-platform",
+ "fynx-platform 0.1.0-alpha.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex",
  "hex-literal",
  "hmac",
@@ -655,7 +666,7 @@ dependencies = [
 name = "fynx-rustsec"
 version = "0.1.0"
 dependencies = [
- "fynx-platform",
+ "fynx-platform 0.1.0-alpha.1",
 ]
 
 [[package]]
