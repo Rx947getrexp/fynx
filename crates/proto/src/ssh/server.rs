@@ -36,10 +36,7 @@ use crate::ssh::connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelOpen, ChannelOpenConfirmation, ChannelRequest,
     ChannelRequestType, ChannelSuccess,
 };
-use crate::ssh::hostkey::{
-    EcdsaP256HostKey, EcdsaP384HostKey, EcdsaP521HostKey, Ed25519HostKey, HostKey,
-    RsaSha2_256HostKey, RsaSha2_512HostKey,
-};
+use crate::ssh::hostkey::{Ed25519HostKey, HostKey};
 use crate::ssh::kex::{negotiate_algorithm, KexInit, NewKeys};
 use crate::ssh::kex_dh::Curve25519Exchange;
 use crate::ssh::message::MessageType;

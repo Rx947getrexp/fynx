@@ -1,14 +1,15 @@
 [package]
 name = "fynx-proto"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Fynx Core Team"]
 description = "Protocol implementations for the Fynx security ecosystem (SSH, DTLS, IPSec)"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/fynx-project/fynx"
+repository = "https://github.com/Rx947getrexp/fynx"
 keywords = ["ssh", "security", "protocol", "network"]
 categories = ["network-programming", "cryptography"]
+readme = "README.md"
 
 [features]
 default = ["ssh"]

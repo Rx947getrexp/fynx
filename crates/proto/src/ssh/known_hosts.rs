@@ -480,9 +480,6 @@ impl KnownHostsFile {
             format!("[{}]:{}", hostname, port)
         };
 
-        // Encode key data as base64
-        let base64_key = base64::engine::general_purpose::STANDARD.encode(key_data);
-
         // Create KnownHost entry manually (since parse_line expects a full line)
         let entry = KnownHost {
             hostname_pattern: hostname_pattern.clone(),
