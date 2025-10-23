@@ -20,3 +20,8 @@ Thumbs.db
 # Testing
 *.profraw
 *.profdata
+
+# Hidden files and directories (禁止上传隐藏文件)
+.*
+!.gitignore
+!.github/
