@@ -584,6 +584,227 @@ impl IkeSaInitExchange {
     }
 }
 
+/// IKE_AUTH exchange handler
+///
+/// Handles the IKE_AUTH exchange which authenticates peers and creates the first Child SA.
+///
+/// # Exchange Flow (RFC 7296 Section 1.2)
+///
+/// ```text
+/// Initiator                         Responder
+/// -----------                       -----------
+/// HDR, SK {IDi, [CERT,] [CERTREQ,]
+///     [IDr,] AUTH, SAi2,
+///     TSi, TSr}  -->
+///                     <--  HDR, SK {IDr, [CERT,] AUTH,
+///                              SAr2, TSi, TSr}
+/// ```
+///
+/// All payloads after IKE_SA_INIT are encrypted and integrity-protected using SK payload.
+pub struct IkeAuthExchange;
+
+impl IkeAuthExchange {
+    /// Create IKE_AUTH request (initiator)
+    ///
+    /// Creates an encrypted IKE_AUTH request containing:
+    /// - IDi: Initiator identification
+    /// - AUTH: Authentication data (PSK-based)
+    /// - SAi2: Child SA proposals
+    /// - TSi: Initiator's traffic selectors
+    /// - TSr: Responder's traffic selectors
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must be in InitDone state)
+    /// * `id_payload` - Initiator's identification
+    /// * `psk` - Pre-shared key for authentication
+    /// * `child_proposals` - Child SA proposals
+    /// * `ts_i` - Initiator's traffic selectors
+    /// * `ts_r` - Responder's traffic selectors
+    ///
+    /// # Returns
+    ///
+    /// Returns the encrypted IKE_AUTH request message
+    ///
+    /// # State Transition
+    ///
+    /// InitDone → AuthSent
+    pub fn create_request(
+        context: &mut IkeSaContext,
+        id_payload: IdPayload,
+        psk: &[u8],
+        child_proposals: Vec<Proposal>,
+        ts_i: super::payload::TrafficSelectorsPayload,
+        ts_r: super::payload::TrafficSelectorsPayload,
+    ) -> Result<IkeMessage> {
+        // Validate state
+        if context.state != IkeState::InitDone {
+            return Err(Error::InvalidState(format!(
+                "Cannot create IKE_AUTH request in state {:?}",
+                context.state
+            )));
+        }
+
+        // Get the selected proposal from IKE_SA_INIT
+        let _selected_proposal = context
+            .selected_proposal
+            .as_ref()
+            .ok_or_else(|| Error::Internal("No proposal selected".into()))?;
+
+        // TODO: Get PRF algorithm from selected proposal
+        // TODO: Compute AUTH payload using PSK
+        // TODO: Build inner payloads: IDi, AUTH, SAi2, TSi, TSr
+        // TODO: Serialize inner payloads
+        // TODO: Add padding
+        // TODO: Encrypt with SK_ei
+        // TODO: Create SK payload
+        // TODO: Build IKE message with encrypted payload
+        // TODO: Transition to AuthSent state
+
+        // Placeholder implementation
+        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+    }
+
+    /// Process IKE_AUTH request (responder)
+    ///
+    /// Processes an encrypted IKE_AUTH request:
+    /// - Decrypt SK payload
+    /// - Parse inner payloads
+    /// - Validate AUTH payload
+    /// - Select Child SA proposal
+    /// - Negotiate traffic selectors
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must be in InitDone state)
+    /// * `request` - IKE_AUTH request message
+    /// * `psk` - Pre-shared key for authentication
+    /// * `configured_proposals` - Configured Child SA proposals
+    ///
+    /// # Returns
+    ///
+    /// Returns tuple of (peer_id, selected_proposal, negotiated_tsi, negotiated_tsr)
+    pub fn process_request(
+        context: &mut IkeSaContext,
+        request: &IkeMessage,
+        psk: &[u8],
+        configured_proposals: &[Proposal],
+    ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+        // Validate state
+        if context.state != IkeState::InitDone {
+            return Err(Error::InvalidState(format!(
+                "Cannot process IKE_AUTH request in state {:?}",
+                context.state
+            )));
+        }
+
+        // Validate exchange type
+        if request.header.exchange_type != ExchangeType::IkeAuth {
+            return Err(Error::InvalidExchangeType);
+        }
+
+        // TODO: Extract SK payload from message
+        // TODO: Decrypt SK payload using SK_er
+        // TODO: Parse inner payloads
+        // TODO: Extract IDi, AUTH, SAi2, TSi, TSr
+        // TODO: Validate AUTH payload
+        // TODO: Select Child SA proposal
+        // TODO: Negotiate traffic selectors
+
+        // Placeholder implementation
+        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+    }
+
+    /// Create IKE_AUTH response (responder)
+    ///
+    /// Creates an encrypted IKE_AUTH response containing:
+    /// - IDr: Responder identification
+    /// - AUTH: Authentication data
+    /// - SAr2: Selected Child SA proposal
+    /// - TSi: Negotiated initiator traffic selectors
+    /// - TSr: Negotiated responder traffic selectors
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context
+    /// * `request` - Original request message (for message ID)
+    /// * `id_payload` - Responder's identification
+    /// * `psk` - Pre-shared key
+    /// * `selected_proposal` - Selected Child SA proposal
+    /// * `ts_i` - Negotiated initiator traffic selectors
+    /// * `ts_r` - Negotiated responder traffic selectors
+    ///
+    /// # Returns
+    ///
+    /// Returns the encrypted IKE_AUTH response message
+    ///
+    /// # State Transition
+    ///
+    /// InitDone → Established
+    pub fn create_response(
+        context: &mut IkeSaContext,
+        request: &IkeMessage,
+        id_payload: IdPayload,
+        psk: &[u8],
+        selected_proposal: Proposal,
+        ts_i: super::payload::TrafficSelectorsPayload,
+        ts_r: super::payload::TrafficSelectorsPayload,
+    ) -> Result<IkeMessage> {
+        // TODO: Compute AUTH payload
+        // TODO: Build inner payloads: IDr, AUTH, SAr2, TSi, TSr
+        // TODO: Serialize and encrypt
+        // TODO: Create response message
+        // TODO: Transition to Established state
+
+        // Placeholder implementation
+        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+    }
+
+    /// Process IKE_AUTH response (initiator)
+    ///
+    /// Processes an encrypted IKE_AUTH response:
+    /// - Decrypt SK payload
+    /// - Parse inner payloads
+    /// - Validate AUTH payload
+    /// - Store selected Child SA proposal
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must be in AuthSent state)
+    /// * `response` - IKE_AUTH response message
+    /// * `psk` - Pre-shared key
+    ///
+    /// # Returns
+    ///
+    /// Returns tuple of (peer_id, selected_proposal, tsi, tsr)
+    ///
+    /// # State Transition
+    ///
+    /// AuthSent → Established
+    pub fn process_response(
+        context: &mut IkeSaContext,
+        response: &IkeMessage,
+        psk: &[u8],
+    ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+        // Validate state
+        if context.state != IkeState::AuthSent {
+            return Err(Error::InvalidState(format!(
+                "Cannot process IKE_AUTH response in state {:?}",
+                context.state
+            )));
+        }
+
+        // TODO: Extract and decrypt SK payload
+        // TODO: Parse inner payloads
+        // TODO: Validate AUTH payload
+        // TODO: Store Child SA proposal
+        // TODO: Transition to Established state
+
+        // Placeholder implementation
+        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
