@@ -45,7 +45,7 @@
 //! - TS: Traffic Selectors
 //! ```
 
-use super::constants::{ExchangeType, IkeFlags};
+use super::constants::{ExchangeType, IkeFlags, PayloadType};
 use super::message::{IkeHeader, IkeMessage};
 use super::payload::{
     AuthPayload, IdPayload, IkePayload, KePayload, NoncePayload, NotifyPayload, SaPayload,
@@ -717,6 +717,7 @@ impl IkeAuthExchange {
     /// * `ike_header` - IKE header bytes (used as AAD)
     /// * `sk_payload` - Encrypted SK payload
     /// * `cipher` - Cipher algorithm to use
+    /// * `first_payload_type` - Type of the first inner payload
     ///
     /// # Returns
     ///
@@ -726,6 +727,7 @@ impl IkeAuthExchange {
         ike_header: &[u8],
         sk_payload: &super::payload::EncryptedPayload,
         cipher: crate::ipsec::crypto::cipher::CipherAlgorithm,
+        first_payload_type: PayloadType,
     ) -> Result<Vec<IkePayload>> {
         // Get decryption key
         let decryption_key = context
@@ -752,10 +754,57 @@ impl IkeAuthExchange {
 
         let payload_data = &plaintext[..plaintext.len() - pad_len - 1];
 
-        // Parse inner payloads
-        // TODO: Implement payload parsing from bytes
-        // For now, return empty list as placeholder
-        Ok(Vec::new())
+        // Parse inner payloads using the provided first payload type
+        Self::parse_payload_chain(first_payload_type, payload_data)
+    }
+
+    /// Parse a chain of payloads from bytes
+    ///
+    /// Parses a linked list of IKE payloads where each payload header
+    /// contains the type of the next payload.
+    ///
+    /// # Arguments
+    ///
+    /// * `first_payload_type` - Type of the first payload in the chain
+    /// * `data` - Byte slice containing payload chain
+    ///
+    /// # Returns
+    ///
+    /// Returns vector of parsed payloads
+    fn parse_payload_chain(
+        mut current_type: PayloadType,
+        data: &[u8],
+    ) -> Result<Vec<IkePayload>> {
+        use super::message::IkeMessage;
+        use super::payload::PayloadHeader;
+
+        let mut payloads = Vec::new();
+        let mut offset = 0;
+
+        // Keep parsing until we hit the end or NoNextPayload
+        while current_type != PayloadType::None && offset < data.len() {
+            // Parse header to get next_payload and length
+            let header = PayloadHeader::from_bytes(&data[offset..])?;
+
+            if offset + header.length as usize > data.len() {
+                return Err(Error::BufferTooShort {
+                    required: header.length as usize,
+                    available: data.len() - offset,
+                });
+            }
+
+            // Parse the current payload using its type
+            let payload =
+                IkeMessage::parse_payload(current_type, &data[offset..offset + header.length as usize])?;
+
+            payloads.push(payload);
+            offset += header.length as usize;
+
+            // Move to next payload type
+            current_type = header.next_payload;
+        }
+
+        Ok(payloads)
     }
 
     /// Create IKE_AUTH request (initiator)
@@ -1009,7 +1058,14 @@ impl IkeAuthExchange {
         let ike_header_bytes = request.header.to_bytes();
 
         // Decrypt SK payload
-        let _inner_payloads = Self::decrypt_payloads(context, &ike_header_bytes, sk_payload, cipher)?;
+        // In IKE_AUTH request, first payload is IDi
+        let _inner_payloads = Self::decrypt_payloads(
+            context,
+            &ike_header_bytes,
+            sk_payload,
+            cipher,
+            PayloadType::IDi,
+        )?;
 
         // TODO: Parse inner payloads from decrypted data
         // For now, we'll create placeholder data for testing
@@ -1308,7 +1364,14 @@ impl IkeAuthExchange {
         let ike_header_bytes = response.header.to_bytes();
 
         // Decrypt SK payload
-        let _inner_payloads = Self::decrypt_payloads(context, &ike_header_bytes, sk_payload, cipher)?;
+        // In IKE_AUTH response, first payload is IDr
+        let _inner_payloads = Self::decrypt_payloads(
+            context,
+            &ike_header_bytes,
+            sk_payload,
+            cipher,
+            PayloadType::IDr,
+        )?;
 
         // TODO: Parse inner payloads from decrypted data
         // For now, return placeholder data similar to process_request
@@ -1539,20 +1602,26 @@ mod tests {
         assert!(sk_payload.is_aead()); // ICV should be empty for AEAD
 
         // Decrypt (responder receives)
-        let decrypted = IkeAuthExchange::decrypt_payloads(&ctx_r, &ike_header, &sk_payload, cipher)
-            .expect("Decryption failed");
+        let decrypted = IkeAuthExchange::decrypt_payloads(
+            &ctx_r,
+            &ike_header,
+            &sk_payload,
+            cipher,
+            PayloadType::AUTH, // First inner payload is AUTH
+        )
+        .expect("Decryption failed");
 
-        // For now, decrypt_payloads returns empty Vec (TODO: implement parsing)
-        // Once parsing is implemented, we should verify:
-        // assert_eq!(decrypted.len(), 1);
-        // match &decrypted[0] {
-        //     IkePayload::AUTH(auth) => {
-        //         assert_eq!(auth.auth_method, AuthMethod::SharedKeyMic);
-        //         assert_eq!(auth.auth_data, vec![0xAA; 32]);
-        //     }
-        //     _ => panic!("Expected AUTH payload"),
-        // }
-        assert_eq!(decrypted.len(), 0); // Placeholder until parsing implemented
+        // Verify parsed payloads
+        assert_eq!(decrypted.len(), 1, "Should have parsed 1 payload");
+
+        // Debug: print actual payload type
+        match &decrypted[0] {
+            IkePayload::AUTH(auth) => {
+                assert_eq!(auth.auth_method, AuthMethod::SharedKeyMic);
+                assert_eq!(auth.auth_data, vec![0xAA; 32]);
+            }
+            other => panic!("Expected AUTH payload, got {:?}", other.payload_type()),
+        }
     }
 
     #[test]
@@ -1597,7 +1666,13 @@ mod tests {
 
         // Try to decrypt with wrong AAD
         let wrong_header = vec![0xFF; 28];
-        let result = IkeAuthExchange::decrypt_payloads(&ctx, &wrong_header, &sk_payload, cipher);
+        let result = IkeAuthExchange::decrypt_payloads(
+            &ctx,
+            &wrong_header,
+            &sk_payload,
+            cipher,
+            PayloadType::AUTH,
+        );
 
         // Should fail due to authentication tag mismatch
         assert!(result.is_err());
@@ -1636,7 +1711,13 @@ mod tests {
         let corrupted_payload = EncryptedPayload::new_aead(sk_payload.iv.clone(), corrupted_data);
 
         // Try to decrypt corrupted data
-        let result = IkeAuthExchange::decrypt_payloads(&ctx, &ike_header, &corrupted_payload, cipher);
+        let result = IkeAuthExchange::decrypt_payloads(
+            &ctx,
+            &ike_header,
+            &corrupted_payload,
+            cipher,
+            PayloadType::AUTH,
+        );
 
         // Should fail due to authentication tag mismatch
         assert!(result.is_err());

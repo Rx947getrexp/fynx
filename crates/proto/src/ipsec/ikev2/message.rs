@@ -293,7 +293,7 @@ impl IkeMessage {
     }
 
     /// Parse a specific payload type from bytes
-    fn parse_payload(payload_type: PayloadType, data: &[u8]) -> Result<IkePayload> {
+    pub(crate) fn parse_payload(payload_type: PayloadType, data: &[u8]) -> Result<IkePayload> {
         // Parse header first
         let header = PayloadHeader::from_bytes(data)?;
         let payload_data = &data[PayloadHeader::SIZE..header.length as usize];
@@ -311,6 +311,38 @@ impl IkeMessage {
             PayloadType::Nonce => {
                 let nonce = NoncePayload::from_payload_data(payload_data)?;
                 Ok(IkePayload::Nonce(nonce))
+            }
+            PayloadType::IDi => {
+                let id = IdPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::IDi(id))
+            }
+            PayloadType::IDr => {
+                let id = IdPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::IDr(id))
+            }
+            PayloadType::AUTH => {
+                let auth = AuthPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::AUTH(auth))
+            }
+            PayloadType::TSi => {
+                let ts = TrafficSelectorsPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::TSi(ts))
+            }
+            PayloadType::TSr => {
+                let ts = TrafficSelectorsPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::TSr(ts))
+            }
+            PayloadType::N => {
+                let notify = NotifyPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::N(notify))
+            }
+            PayloadType::D => {
+                let delete = DeletePayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::D(delete))
+            }
+            PayloadType::V => {
+                let vendor = VendorIdPayload::from_payload_data(payload_data)?;
+                Ok(IkePayload::V(vendor))
             }
             _ => {
                 // Unknown payload type - store as raw data
