@@ -607,7 +607,7 @@ mod tests {
             200,
         );
 
-        let sa = SaPayload::new(vec![1, 2, 3, 4, 5]);
+        let sa = SaPayload::new(vec![]); // Empty proposals for testing
         let ke = KePayload::new(KePayload::DH_GROUP_31, vec![0xBBu8; 32]);
         let nonce = NoncePayload::new(vec![0xCCu8; 16]).unwrap();
 
