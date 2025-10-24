@@ -91,6 +91,27 @@ pub struct IkeSaContext {
 
     /// Shared DH secret (computed after key exchange)
     pub shared_secret: Option<Vec<u8>>,
+
+    /// SK_d - Key derivation key (for deriving child SA keys)
+    pub sk_d: Option<Vec<u8>>,
+
+    /// SK_ai - Initiator's authentication key
+    pub sk_ai: Option<Vec<u8>>,
+
+    /// SK_ar - Responder's authentication key
+    pub sk_ar: Option<Vec<u8>>,
+
+    /// SK_ei - Initiator's encryption key
+    pub sk_ei: Option<Vec<u8>>,
+
+    /// SK_er - Responder's encryption key
+    pub sk_er: Option<Vec<u8>>,
+
+    /// SK_pi - Initiator's SK_p key (for PSK auth)
+    pub sk_pi: Option<Vec<u8>>,
+
+    /// SK_pr - Responder's SK_p key (for PSK auth)
+    pub sk_pr: Option<Vec<u8>>,
 }
 
 impl IkeSaContext {
@@ -108,6 +129,13 @@ impl IkeSaContext {
             ke_i: None,
             ke_r: None,
             shared_secret: None,
+            sk_d: None,
+            sk_ai: None,
+            sk_ar: None,
+            sk_ei: None,
+            sk_er: None,
+            sk_pi: None,
+            sk_pr: None,
         }
     }
 
@@ -125,6 +153,13 @@ impl IkeSaContext {
             ke_i: None,
             ke_r: None,
             shared_secret: None,
+            sk_d: None,
+            sk_ai: None,
+            sk_ar: None,
+            sk_ei: None,
+            sk_er: None,
+            sk_pi: None,
+            sk_pr: None,
         }
     }
 
