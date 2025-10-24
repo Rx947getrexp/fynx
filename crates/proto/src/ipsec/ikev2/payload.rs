@@ -144,6 +144,9 @@ pub enum IkePayload {
     /// Traffic Selector - Responder
     TSr(TrafficSelectorsPayload),
 
+    /// Encrypted payload (SK)
+    SK(EncryptedPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -168,6 +171,7 @@ impl IkePayload {
             IkePayload::V(_) => PayloadType::V,
             IkePayload::TSi(_) => PayloadType::TSi,
             IkePayload::TSr(_) => PayloadType::TSr,
+            IkePayload::SK(_) => PayloadType::SK,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -1502,6 +1506,159 @@ impl TrafficSelectorsPayload {
     }
 }
 
+/// Encrypted Payload (SK) (RFC 7296 Section 3.14)
+///
+/// The Encrypted payload contains encrypted and integrity-protected data.
+/// It is used in IKE_AUTH and subsequent exchanges to protect payload confidentiality.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Next Payload  |C|  RESERVED   |         Payload Length        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Initialization Vector                     |
+/// |         (length is block size for encryption algorithm)       |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ~                    Encrypted IKE Payloads                     ~
+/// +               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |               |             Padding (0-255 octets)            |
+/// +-+-+-+-+-+-+-+-+                               +-+-+-+-+-+-+-+-+
+/// |                                               |  Pad Length   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ~                    Integrity Checksum Data                    ~
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedPayload {
+    /// Initialization Vector (IV)
+    /// Length depends on encryption algorithm:
+    /// - AES-GCM: 8 bytes (RFC 4106)
+    /// - AES-CBC: 16 bytes (AES block size)
+    /// - ChaCha20-Poly1305: 12 bytes (RFC 7539)
+    pub iv: Vec<u8>,
+
+    /// Encrypted data (includes inner payloads + padding + pad_length)
+    /// For AEAD ciphers (AES-GCM, ChaCha20), this includes the auth tag
+    pub encrypted_data: Vec<u8>,
+
+    /// Integrity Checksum (ICV) for non-AEAD ciphers
+    /// Empty for AEAD ciphers (auth tag is part of encrypted_data)
+    pub icv: Vec<u8>,
+}
+
+impl EncryptedPayload {
+    /// Create new encrypted payload
+    ///
+    /// # Arguments
+    ///
+    /// * `iv` - Initialization vector
+    /// * `encrypted_data` - Encrypted payload data
+    /// * `icv` - Integrity check value (empty for AEAD)
+    pub fn new(iv: Vec<u8>, encrypted_data: Vec<u8>, icv: Vec<u8>) -> Self {
+        EncryptedPayload {
+            iv,
+            encrypted_data,
+            icv,
+        }
+    }
+
+    /// Create encrypted payload for AEAD cipher
+    ///
+    /// AEAD ciphers (AES-GCM, ChaCha20-Poly1305) include the authentication tag
+    /// in the encrypted data, so ICV is empty.
+    pub fn new_aead(iv: Vec<u8>, encrypted_data_with_tag: Vec<u8>) -> Self {
+        EncryptedPayload {
+            iv,
+            encrypted_data: encrypted_data_with_tag,
+            icv: Vec::new(),
+        }
+    }
+
+    /// Parse encrypted payload from bytes (without header)
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Payload data (IV + encrypted data + ICV)
+    /// * `iv_len` - Expected IV length based on encryption algorithm
+    /// * `icv_len` - Expected ICV length (0 for AEAD ciphers)
+    ///
+    /// # Returns
+    ///
+    /// Returns parsed encrypted payload
+    pub fn from_payload_data(data: &[u8], iv_len: usize, icv_len: usize) -> Result<Self> {
+        // Validate minimum length: IV + at least 1 byte encrypted + ICV
+        if data.len() < iv_len + 1 + icv_len {
+            return Err(Error::BufferTooShort {
+                required: iv_len + 1 + icv_len,
+                available: data.len(),
+            });
+        }
+
+        // Parse IV
+        let iv = data[..iv_len].to_vec();
+
+        // Parse encrypted data (everything between IV and ICV)
+        let encrypted_end = data.len() - icv_len;
+        let encrypted_data = data[iv_len..encrypted_end].to_vec();
+
+        // Parse ICV (if non-AEAD)
+        let icv = if icv_len > 0 {
+            data[encrypted_end..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Ok(EncryptedPayload {
+            iv,
+            encrypted_data,
+            icv,
+        })
+    }
+
+    /// Serialize encrypted payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Write IV
+        bytes.extend_from_slice(&self.iv);
+
+        // Write encrypted data
+        bytes.extend_from_slice(&self.encrypted_data);
+
+        // Write ICV (if non-AEAD)
+        bytes.extend_from_slice(&self.icv);
+
+        bytes
+    }
+
+    /// Get total payload length (header + IV + encrypted data + ICV)
+    pub fn total_length(&self) -> u16 {
+        let data_len = self.iv.len() + self.encrypted_data.len() + self.icv.len();
+        (PayloadHeader::SIZE + data_len) as u16
+    }
+
+    /// Get IV length
+    pub fn iv_len(&self) -> usize {
+        self.iv.len()
+    }
+
+    /// Get encrypted data length
+    pub fn encrypted_len(&self) -> usize {
+        self.encrypted_data.len()
+    }
+
+    /// Get ICV length
+    pub fn icv_len(&self) -> usize {
+        self.icv.len()
+    }
+
+    /// Check if this is an AEAD payload (no separate ICV)
+    pub fn is_aead(&self) -> bool {
+        self.icv.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2219,5 +2376,142 @@ mod tests {
         assert_eq!(ts.ip_protocol_id, 6);
         assert_eq!(ts.start_port, 1024);
         assert_eq!(ts.end_port, 8080);
+    }
+
+    // Encrypted Payload (SK) Tests
+
+    #[test]
+    fn test_encrypted_payload_new() {
+        let iv = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let encrypted = vec![0xAA; 32];
+        let icv = vec![0xBB; 16];
+
+        let sk = EncryptedPayload::new(iv.clone(), encrypted.clone(), icv.clone());
+
+        assert_eq!(sk.iv, iv);
+        assert_eq!(sk.encrypted_data, encrypted);
+        assert_eq!(sk.icv, icv);
+        assert!(!sk.is_aead());
+    }
+
+    #[test]
+    fn test_encrypted_payload_new_aead() {
+        let iv = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 8 bytes for AES-GCM
+        let encrypted_with_tag = vec![0xAA; 48]; // Data + 16-byte auth tag
+
+        let sk = EncryptedPayload::new_aead(iv.clone(), encrypted_with_tag.clone());
+
+        assert_eq!(sk.iv, iv);
+        assert_eq!(sk.encrypted_data, encrypted_with_tag);
+        assert!(sk.icv.is_empty());
+        assert!(sk.is_aead());
+    }
+
+    #[test]
+    fn test_encrypted_payload_lengths() {
+        let iv = vec![0u8; 8];
+        let encrypted = vec![0u8; 32];
+        let icv = vec![0u8; 16];
+
+        let sk = EncryptedPayload::new(iv, encrypted, icv);
+
+        assert_eq!(sk.iv_len(), 8);
+        assert_eq!(sk.encrypted_len(), 32);
+        assert_eq!(sk.icv_len(), 16);
+        // Total: header (4) + IV (8) + encrypted (32) + ICV (16) = 60
+        assert_eq!(sk.total_length(), 60);
+    }
+
+    #[test]
+    fn test_encrypted_payload_aead_length() {
+        let iv = vec![0u8; 8];
+        let encrypted_with_tag = vec![0u8; 48]; // 32 data + 16 tag
+
+        let sk = EncryptedPayload::new_aead(iv, encrypted_with_tag);
+
+        assert_eq!(sk.iv_len(), 8);
+        assert_eq!(sk.encrypted_len(), 48);
+        assert_eq!(sk.icv_len(), 0);
+        // Total: header (4) + IV (8) + encrypted+tag (48) = 60
+        assert_eq!(sk.total_length(), 60);
+    }
+
+    #[test]
+    fn test_encrypted_payload_roundtrip_non_aead() {
+        let original = EncryptedPayload::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], // 16-byte IV for AES-CBC
+            vec![0xAA; 32],
+            vec![0xBB; 16]);
+
+        let serialized = original.to_payload_data();
+        let parsed =
+            EncryptedPayload::from_payload_data(&serialized, 16, 16).unwrap();
+
+        assert_eq!(parsed.iv, original.iv);
+        assert_eq!(parsed.encrypted_data, original.encrypted_data);
+        assert_eq!(parsed.icv, original.icv);
+    }
+
+    #[test]
+    fn test_encrypted_payload_roundtrip_aead() {
+        let original = EncryptedPayload::new_aead(
+            vec![1, 2, 3, 4, 5, 6, 7, 8], // 8-byte IV for AES-GCM
+            vec![0xCC; 48],               // Data + tag
+        );
+
+        let serialized = original.to_payload_data();
+        let parsed = EncryptedPayload::from_payload_data(&serialized, 8, 0).unwrap();
+
+        assert_eq!(parsed.iv, original.iv);
+        assert_eq!(parsed.encrypted_data, original.encrypted_data);
+        assert!(parsed.icv.is_empty());
+        assert!(parsed.is_aead());
+    }
+
+    #[test]
+    fn test_encrypted_payload_parse_too_short() {
+        // Only 10 bytes, need at least IV(8) + 1 byte data + ICV(16) = 25
+        let data = vec![0u8; 10];
+        let result = EncryptedPayload::from_payload_data(&data, 8, 16);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_payload_chacha20_iv() {
+        // ChaCha20-Poly1305 uses 12-byte IV
+        let iv = vec![0u8; 12];
+        let encrypted_with_tag = vec![0xDD; 64]; // Data + 16-byte tag
+
+        let sk = EncryptedPayload::new_aead(iv.clone(), encrypted_with_tag.clone());
+
+        assert_eq!(sk.iv_len(), 12);
+        assert_eq!(sk.encrypted_len(), 64);
+        assert!(sk.is_aead());
+    }
+
+    #[test]
+    fn test_encrypted_payload_serialization_format() {
+        let iv = vec![1, 2, 3, 4];
+        let encrypted = vec![10, 11, 12];
+        let icv = vec![20, 21];
+
+        let sk = EncryptedPayload::new(iv, encrypted, icv);
+        let serialized = sk.to_payload_data();
+
+        // Format: IV | encrypted_data | ICV
+        assert_eq!(serialized, vec![1, 2, 3, 4, 10, 11, 12, 20, 21]);
+    }
+
+    #[test]
+    fn test_encrypted_payload_empty_encrypted_data() {
+        // Minimum case: IV + at least 1 byte encrypted
+        let iv = vec![0u8; 8];
+        let encrypted = vec![0xEE]; // Just 1 byte
+        let icv = Vec::new();
+
+        let sk = EncryptedPayload::new(iv, encrypted, icv);
+
+        assert_eq!(sk.encrypted_len(), 1);
+        assert_eq!(sk.total_length(), 13); // Header(4) + IV(8) + data(1) = 13
     }
 }
