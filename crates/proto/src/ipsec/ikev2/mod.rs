@@ -39,9 +39,11 @@
 pub mod constants;
 pub mod message;
 pub mod payload;
+pub mod proposal;
 pub mod state;
 
 pub use constants::*;
 pub use message::*;
 pub use payload::*;
+pub use proposal::*;
 pub use state::*;
