@@ -138,6 +138,12 @@ pub enum IkePayload {
     /// Vendor ID payload
     V(VendorIdPayload),
 
+    /// Traffic Selector - Initiator
+    TSi(TrafficSelectorsPayload),
+
+    /// Traffic Selector - Responder
+    TSr(TrafficSelectorsPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -160,6 +166,8 @@ impl IkePayload {
             IkePayload::N(_) => PayloadType::N,
             IkePayload::D(_) => PayloadType::D,
             IkePayload::V(_) => PayloadType::V,
+            IkePayload::TSi(_) => PayloadType::TSi,
+            IkePayload::TSr(_) => PayloadType::TSr,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -1159,6 +1167,341 @@ impl VendorIdPayload {
     }
 }
 
+/// TS Type (Traffic Selector Type) - RFC 7296 Section 3.13.1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TsType {
+    /// IPv4 address range
+    Ipv4AddrRange = 7,
+    /// IPv6 address range
+    Ipv6AddrRange = 8,
+}
+
+impl TsType {
+    /// Convert from u8
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            7 => Some(TsType::Ipv4AddrRange),
+            8 => Some(TsType::Ipv6AddrRange),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Traffic Selector (RFC 7296 Section 3.13.1)
+///
+/// Describes a range of IP addresses and ports that will be protected by IPSec.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   TS Type     |IP Protocol ID |       Selector Length         |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |           Start Port          |           End Port            |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                         Starting Address                      ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                         Ending Address                        ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrafficSelector {
+    /// TS type (IPv4 or IPv6)
+    pub ts_type: TsType,
+
+    /// IP protocol ID (0 = any, 6 = TCP, 17 = UDP)
+    pub ip_protocol_id: u8,
+
+    /// Start port (0 = any)
+    pub start_port: u16,
+
+    /// End port (65535 = any)
+    pub end_port: u16,
+
+    /// Starting address (4 bytes for IPv4, 16 bytes for IPv6)
+    pub start_address: Vec<u8>,
+
+    /// Ending address (4 bytes for IPv4, 16 bytes for IPv6)
+    pub end_address: Vec<u8>,
+}
+
+impl TrafficSelector {
+    /// Create new traffic selector
+    pub fn new(
+        ts_type: TsType,
+        ip_protocol_id: u8,
+        start_port: u16,
+        end_port: u16,
+        start_address: Vec<u8>,
+        end_address: Vec<u8>,
+    ) -> Result<Self> {
+        // Validate address lengths
+        let expected_len = match ts_type {
+            TsType::Ipv4AddrRange => 4,
+            TsType::Ipv6AddrRange => 16,
+        };
+
+        if start_address.len() != expected_len {
+            return Err(Error::InvalidPayload(format!(
+                "Invalid start address length: expected {}, got {}",
+                expected_len,
+                start_address.len()
+            )));
+        }
+
+        if end_address.len() != expected_len {
+            return Err(Error::InvalidPayload(format!(
+                "Invalid end address length: expected {}, got {}",
+                expected_len,
+                end_address.len()
+            )));
+        }
+
+        Ok(TrafficSelector {
+            ts_type,
+            ip_protocol_id,
+            start_port,
+            end_port,
+            start_address,
+            end_address,
+        })
+    }
+
+    /// Create IPv4 traffic selector for any address/port
+    pub fn ipv4_any() -> Self {
+        TrafficSelector {
+            ts_type: TsType::Ipv4AddrRange,
+            ip_protocol_id: 0, // Any protocol
+            start_port: 0,
+            end_port: 65535,
+            start_address: vec![0, 0, 0, 0],
+            end_address: vec![255, 255, 255, 255],
+        }
+    }
+
+    /// Create IPv4 traffic selector for specific address
+    pub fn ipv4_addr(addr: [u8; 4]) -> Self {
+        TrafficSelector {
+            ts_type: TsType::Ipv4AddrRange,
+            ip_protocol_id: 0,
+            start_port: 0,
+            end_port: 65535,
+            start_address: addr.to_vec(),
+            end_address: addr.to_vec(),
+        }
+    }
+
+    /// Create IPv6 traffic selector for any address/port
+    pub fn ipv6_any() -> Self {
+        TrafficSelector {
+            ts_type: TsType::Ipv6AddrRange,
+            ip_protocol_id: 0,
+            start_port: 0,
+            end_port: 65535,
+            start_address: vec![0; 16],
+            end_address: vec![0xFF; 16],
+        }
+    }
+
+    /// Parse traffic selector from bytes
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() < 8 {
+            return Err(Error::BufferTooShort {
+                required: 8,
+                available: data.len(),
+            });
+        }
+
+        // Parse TS type
+        let ts_type = TsType::from_u8(data[0])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown TS type: {}", data[0])))?;
+
+        // Parse IP protocol ID
+        let ip_protocol_id = data[1];
+
+        // Parse selector length (big-endian)
+        let selector_length = u16::from_be_bytes([data[2], data[3]]) as usize;
+
+        // Validate buffer length
+        if data.len() < selector_length {
+            return Err(Error::BufferTooShort {
+                required: selector_length,
+                available: data.len(),
+            });
+        }
+
+        // Parse ports
+        let start_port = u16::from_be_bytes([data[4], data[5]]);
+        let end_port = u16::from_be_bytes([data[6], data[7]]);
+
+        // Determine address length based on type
+        let addr_len = match ts_type {
+            TsType::Ipv4AddrRange => 4,
+            TsType::Ipv6AddrRange => 16,
+        };
+
+        // Validate we have enough data for addresses
+        if data.len() < 8 + addr_len * 2 {
+            return Err(Error::BufferTooShort {
+                required: 8 + addr_len * 2,
+                available: data.len(),
+            });
+        }
+
+        // Parse addresses
+        let start_address = data[8..8 + addr_len].to_vec();
+        let end_address = data[8 + addr_len..8 + addr_len * 2].to_vec();
+
+        Ok(TrafficSelector {
+            ts_type,
+            ip_protocol_id,
+            start_port,
+            end_port,
+            start_address,
+            end_address,
+        })
+    }
+
+    /// Serialize traffic selector to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(8 + self.start_address.len() + self.end_address.len());
+
+        // Write TS type
+        bytes.push(self.ts_type.to_u8());
+
+        // Write IP protocol ID
+        bytes.push(self.ip_protocol_id);
+
+        // Write selector length (big-endian)
+        let selector_length = (8 + self.start_address.len() + self.end_address.len()) as u16;
+        bytes.extend_from_slice(&selector_length.to_be_bytes());
+
+        // Write ports
+        bytes.extend_from_slice(&self.start_port.to_be_bytes());
+        bytes.extend_from_slice(&self.end_port.to_be_bytes());
+
+        // Write addresses
+        bytes.extend_from_slice(&self.start_address);
+        bytes.extend_from_slice(&self.end_address);
+
+        bytes
+    }
+
+    /// Get selector length
+    pub fn length(&self) -> u16 {
+        (8 + self.start_address.len() + self.end_address.len()) as u16
+    }
+}
+
+/// Traffic Selectors Payload (RFC 7296 Section 3.13)
+///
+/// Contains one or more traffic selectors.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Number of TSs |                 RESERVED                      |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                       Traffic Selectors                       ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrafficSelectorsPayload {
+    /// List of traffic selectors
+    pub selectors: Vec<TrafficSelector>,
+}
+
+impl TrafficSelectorsPayload {
+    /// Create new traffic selectors payload
+    pub fn new(selectors: Vec<TrafficSelector>) -> Self {
+        TrafficSelectorsPayload { selectors }
+    }
+
+    /// Create payload with single selector
+    pub fn single(selector: TrafficSelector) -> Self {
+        TrafficSelectorsPayload {
+            selectors: vec![selector],
+        }
+    }
+
+    /// Parse traffic selectors payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.len() < 4 {
+            return Err(Error::BufferTooShort {
+                required: 4,
+                available: data.len(),
+            });
+        }
+
+        // Parse number of TSs
+        let num_ts = data[0] as usize;
+
+        // Reserved bytes 1-3
+
+        // Parse traffic selectors
+        let mut selectors = Vec::with_capacity(num_ts);
+        let mut offset = 4;
+
+        for _ in 0..num_ts {
+            if offset >= data.len() {
+                return Err(Error::BufferTooShort {
+                    required: offset + 8,
+                    available: data.len(),
+                });
+            }
+
+            let ts = TrafficSelector::from_bytes(&data[offset..])?;
+            let ts_len = ts.length() as usize;
+            offset += ts_len;
+            selectors.push(ts);
+        }
+
+        Ok(TrafficSelectorsPayload { selectors })
+    }
+
+    /// Serialize traffic selectors payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Write number of TSs
+        bytes.push(self.selectors.len() as u8);
+
+        // Write reserved (3 bytes)
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8]);
+
+        // Write traffic selectors
+        for ts in &self.selectors {
+            bytes.extend_from_slice(&ts.to_bytes());
+        }
+
+        bytes
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        let data_len: usize = 4 + self.selectors.iter().map(|ts| ts.length() as usize).sum::<usize>();
+        (PayloadHeader::SIZE + data_len) as u16
+    }
+
+    /// Get number of selectors
+    pub fn count(&self) -> usize {
+        self.selectors.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1679,5 +2022,202 @@ mod tests {
 
         assert!(vendor_id.vendor_id.is_empty());
         assert_eq!(vendor_id.total_length(), 4); // Just header
+    }
+
+    // Traffic Selector Tests
+
+    #[test]
+    fn test_ts_type_conversions() {
+        assert_eq!(TsType::from_u8(7), Some(TsType::Ipv4AddrRange));
+        assert_eq!(TsType::from_u8(8), Some(TsType::Ipv6AddrRange));
+        assert_eq!(TsType::from_u8(99), None);
+
+        assert_eq!(TsType::Ipv4AddrRange as u8, 7);
+        assert_eq!(TsType::Ipv6AddrRange as u8, 8);
+    }
+
+    #[test]
+    fn test_traffic_selector_ipv4_any() {
+        let ts = TrafficSelector::ipv4_any();
+
+        assert_eq!(ts.ts_type, TsType::Ipv4AddrRange);
+        assert_eq!(ts.ip_protocol_id, 0); // Any protocol
+        assert_eq!(ts.start_port, 0);
+        assert_eq!(ts.end_port, 65535);
+        assert_eq!(ts.start_address, vec![0, 0, 0, 0]);
+        assert_eq!(ts.end_address, vec![255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn test_traffic_selector_ipv4_addr() {
+        let addr = [192, 168, 1, 100];
+        let ts = TrafficSelector::ipv4_addr(addr);
+
+        assert_eq!(ts.ts_type, TsType::Ipv4AddrRange);
+        assert_eq!(ts.start_address, vec![192, 168, 1, 100]);
+        assert_eq!(ts.end_address, vec![192, 168, 1, 100]);
+        assert_eq!(ts.start_port, 0);
+        assert_eq!(ts.end_port, 65535);
+    }
+
+    #[test]
+    fn test_traffic_selector_ipv6_any() {
+        let ts = TrafficSelector::ipv6_any();
+
+        assert_eq!(ts.ts_type, TsType::Ipv6AddrRange);
+        assert_eq!(ts.ip_protocol_id, 0);
+        assert_eq!(ts.start_port, 0);
+        assert_eq!(ts.end_port, 65535);
+        assert_eq!(ts.start_address, vec![0; 16]);
+        assert_eq!(ts.end_address, vec![255; 16]);
+    }
+
+    #[test]
+    fn test_traffic_selector_new_valid() {
+        let ts = TrafficSelector::new(
+            TsType::Ipv4AddrRange,
+            6, // TCP
+            80,
+            443,
+            vec![192, 168, 1, 0],
+            vec![192, 168, 1, 255],
+        )
+        .unwrap();
+
+        assert_eq!(ts.ip_protocol_id, 6);
+        assert_eq!(ts.start_port, 80);
+        assert_eq!(ts.end_port, 443);
+    }
+
+    #[test]
+    fn test_traffic_selector_invalid_address_length() {
+        // IPv4 should be 4 bytes
+        let result = TrafficSelector::new(
+            TsType::Ipv4AddrRange,
+            0,
+            0,
+            65535,
+            vec![192, 168, 1], // Only 3 bytes
+            vec![192, 168, 1, 255],
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_traffic_selector_ipv6_invalid_length() {
+        // IPv6 should be 16 bytes
+        let result = TrafficSelector::new(
+            TsType::Ipv6AddrRange,
+            0,
+            0,
+            65535,
+            vec![0; 16],
+            vec![255; 15], // Only 15 bytes
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_traffic_selector_roundtrip_ipv4() {
+        let original = TrafficSelector::ipv4_addr([10, 0, 0, 1]);
+        let serialized = original.to_bytes();
+        let parsed = TrafficSelector::from_bytes(&serialized).unwrap();
+
+        assert_eq!(parsed.ts_type, original.ts_type);
+        assert_eq!(parsed.ip_protocol_id, original.ip_protocol_id);
+        assert_eq!(parsed.start_port, original.start_port);
+        assert_eq!(parsed.end_port, original.end_port);
+        assert_eq!(parsed.start_address, original.start_address);
+        assert_eq!(parsed.end_address, original.end_address);
+    }
+
+    #[test]
+    fn test_traffic_selector_roundtrip_ipv6() {
+        let original = TrafficSelector::ipv6_any();
+        let serialized = original.to_bytes();
+        let parsed = TrafficSelector::from_bytes(&serialized).unwrap();
+
+        assert_eq!(parsed.ts_type, TsType::Ipv6AddrRange);
+        assert_eq!(parsed.start_address, vec![0; 16]);
+        assert_eq!(parsed.end_address, vec![255; 16]);
+    }
+
+    #[test]
+    fn test_traffic_selectors_payload_single() {
+        let ts = TrafficSelector::ipv4_any();
+        let payload = TrafficSelectorsPayload::new(vec![ts]);
+
+        assert_eq!(payload.count(), 1);
+        assert_eq!(payload.selectors.len(), 1);
+    }
+
+    #[test]
+    fn test_traffic_selectors_payload_multiple() {
+        let selectors = vec![
+            TrafficSelector::ipv4_addr([192, 168, 1, 1]),
+            TrafficSelector::ipv4_addr([10, 0, 0, 1]),
+            TrafficSelector::ipv6_any(),
+        ];
+        let payload = TrafficSelectorsPayload::new(selectors.clone());
+
+        assert_eq!(payload.count(), 3);
+        assert_eq!(payload.selectors.len(), 3);
+    }
+
+    #[test]
+    fn test_traffic_selectors_payload_roundtrip() {
+        let selectors = vec![
+            TrafficSelector::ipv4_any(),
+            TrafficSelector::ipv4_addr([192, 168, 1, 100]),
+        ];
+        let original = TrafficSelectorsPayload::new(selectors);
+
+        let serialized = original.to_payload_data();
+        let parsed = TrafficSelectorsPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.count(), original.count());
+        assert_eq!(parsed.selectors.len(), original.selectors.len());
+
+        for (parsed_ts, original_ts) in parsed.selectors.iter().zip(original.selectors.iter()) {
+            assert_eq!(parsed_ts.ts_type, original_ts.ts_type);
+            assert_eq!(parsed_ts.start_address, original_ts.start_address);
+            assert_eq!(parsed_ts.end_address, original_ts.end_address);
+        }
+    }
+
+    #[test]
+    fn test_traffic_selectors_payload_total_length() {
+        let selectors = vec![TrafficSelector::ipv4_any()]; // IPv4 TS: 8 + 4 + 4 = 16 bytes
+        let payload = TrafficSelectorsPayload::new(selectors);
+
+        // Header (4) + Num TS (1) + Reserved (3) + TS (16) = 24
+        assert_eq!(payload.total_length(), 24);
+    }
+
+    #[test]
+    fn test_traffic_selectors_payload_empty() {
+        let payload = TrafficSelectorsPayload::new(Vec::new());
+
+        assert_eq!(payload.count(), 0);
+        assert_eq!(payload.total_length(), 8); // Header (4) + Num TS (1) + Reserved (3)
+    }
+
+    #[test]
+    fn test_traffic_selector_tcp_port_range() {
+        let ts = TrafficSelector::new(
+            TsType::Ipv4AddrRange,
+            6, // TCP
+            1024,
+            8080,
+            vec![0, 0, 0, 0],
+            vec![255, 255, 255, 255],
+        )
+        .unwrap();
+
+        assert_eq!(ts.ip_protocol_id, 6);
+        assert_eq!(ts.start_port, 1024);
+        assert_eq!(ts.end_port, 8080);
     }
 }

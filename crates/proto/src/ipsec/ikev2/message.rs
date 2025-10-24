@@ -340,6 +340,8 @@ impl IkeMessage {
                 IkePayload::N(notify) => notify.total_length() as usize,
                 IkePayload::D(delete) => delete.total_length() as usize,
                 IkePayload::V(vendor_id) => vendor_id.total_length() as usize,
+                IkePayload::TSi(ts) => ts.total_length() as usize,
+                IkePayload::TSr(ts) => ts.total_length() as usize,
                 IkePayload::Unknown { data, .. } => PayloadHeader::SIZE + data.len(),
             })
             .sum();
@@ -405,6 +407,8 @@ impl IkeMessage {
                 vendor_id.to_payload_data(),
                 vendor_id.total_length(),
             ),
+            IkePayload::TSi(ts) => (PayloadType::TSi, ts.to_payload_data(), ts.total_length()),
+            IkePayload::TSr(ts) => (PayloadType::TSr, ts.to_payload_data(), ts.total_length()),
             IkePayload::Unknown { payload_type, data } => {
                 (*payload_type, data.clone(), (PayloadHeader::SIZE + data.len()) as u16)
             }
