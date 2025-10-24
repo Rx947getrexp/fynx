@@ -88,6 +88,22 @@ pub enum Error {
         received: u32,
     },
 
+    /// Invalid key length
+    InvalidKeyLength {
+        /// Expected length
+        expected: usize,
+        /// Actual length
+        actual: usize,
+    },
+
+    /// Invalid IV length
+    InvalidIvLength {
+        /// Expected length
+        expected: usize,
+        /// Actual length
+        actual: usize,
+    },
+
     /// I/O error
     Io(String),
 
@@ -150,6 +166,20 @@ impl fmt::Display for Error {
                     f,
                     "Invalid message ID: expected {}, received {}",
                     expected, received
+                )
+            }
+            Error::InvalidKeyLength { expected, actual } => {
+                write!(
+                    f,
+                    "Invalid key length: expected {} bytes, got {}",
+                    expected, actual
+                )
+            }
+            Error::InvalidIvLength { expected, actual } => {
+                write!(
+                    f,
+                    "Invalid IV length: expected {} bytes, got {}",
+                    expected, actual
                 )
             }
             Error::Io(msg) => write!(f, "I/O error: {}", msg),
