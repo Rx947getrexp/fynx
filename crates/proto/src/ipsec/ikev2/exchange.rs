@@ -203,6 +203,123 @@ impl IkeSaContext {
         }
         Ok(())
     }
+
+    /// Derive encryption and authentication keys from DH shared secret
+    ///
+    /// Implements RFC 7296 Section 2.14 key derivation:
+    /// ```text
+    /// SKEYSEED = prf(Ni | Nr, g^ir)
+    /// {SK_d | SK_ai | SK_ar | SK_ei | SK_er | SK_pi | SK_pr}
+    ///     = prf+ (SKEYSEED, Ni | Nr | SPIi | SPIr)
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `prf_alg` - PRF algorithm from selected proposal
+    /// * `encr_key_len` - Encryption key length (from selected cipher)
+    /// * `integ_key_len` - Integrity key length (0 for AEAD ciphers)
+    ///
+    /// # Returns
+    ///
+    /// Returns Ok(()) if keys derived successfully, or error if preconditions not met
+    pub fn derive_keys(
+        &mut self,
+        prf_alg: crate::ipsec::crypto::PrfAlgorithm,
+        encr_key_len: usize,
+        integ_key_len: usize,
+    ) -> Result<()> {
+        // Validate preconditions
+        let nonce_i = self
+            .nonce_i
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Initiator nonce not set".into()))?;
+        let nonce_r = self
+            .nonce_r
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Responder nonce not set".into()))?;
+        let shared_secret = self
+            .shared_secret
+            .as_ref()
+            .ok_or_else(|| Error::Internal("DH shared secret not computed".into()))?;
+
+        // Derive all keys using KeyMaterial::derive
+        let key_material = crate::ipsec::crypto::KeyMaterial::derive(
+            prf_alg,
+            nonce_i,
+            nonce_r,
+            shared_secret,
+            &self.initiator_spi,
+            &self.responder_spi,
+            encr_key_len,
+            integ_key_len,
+        )?;
+
+        // Store derived keys in context
+        self.sk_d = Some(key_material.sk_d);
+        self.sk_ai = Some(key_material.sk_ai);
+        self.sk_ar = Some(key_material.sk_ar);
+        self.sk_ei = Some(key_material.sk_ei);
+        self.sk_er = Some(key_material.sk_er);
+        self.sk_pi = Some(key_material.sk_pi);
+        self.sk_pr = Some(key_material.sk_pr);
+
+        Ok(())
+    }
+
+    /// Get encryption key for sending messages
+    ///
+    /// Returns SK_ei for initiator, SK_er for responder
+    pub fn get_send_encryption_key(&self) -> Option<&[u8]> {
+        if self.is_initiator {
+            self.sk_ei.as_deref()
+        } else {
+            self.sk_er.as_deref()
+        }
+    }
+
+    /// Get encryption key for receiving messages
+    ///
+    /// Returns SK_er for initiator, SK_ei for responder
+    pub fn get_recv_encryption_key(&self) -> Option<&[u8]> {
+        if self.is_initiator {
+            self.sk_er.as_deref()
+        } else {
+            self.sk_ei.as_deref()
+        }
+    }
+
+    /// Get authentication key for sending messages
+    ///
+    /// Returns SK_ai for initiator, SK_ar for responder
+    pub fn get_send_auth_key(&self) -> Option<&[u8]> {
+        if self.is_initiator {
+            self.sk_ai.as_deref()
+        } else {
+            self.sk_ar.as_deref()
+        }
+    }
+
+    /// Get authentication key for receiving messages
+    ///
+    /// Returns SK_ar for initiator, SK_ai for responder
+    pub fn get_recv_auth_key(&self) -> Option<&[u8]> {
+        if self.is_initiator {
+            self.sk_ar.as_deref()
+        } else {
+            self.sk_ai.as_deref()
+        }
+    }
+
+    /// Get PSK authentication key for this peer
+    ///
+    /// Returns SK_pi for initiator, SK_pr for responder
+    pub fn get_psk_auth_key(&self) -> Option<&[u8]> {
+        if self.is_initiator {
+            self.sk_pi.as_deref()
+        } else {
+            self.sk_pr.as_deref()
+        }
+    }
 }
 
 /// IKE_SA_INIT exchange handler
