@@ -120,6 +120,15 @@ pub enum IkePayload {
     /// Nonce payload
     Nonce(NoncePayload),
 
+    /// Identification payload (Initiator)
+    IDi(IdPayload),
+
+    /// Identification payload (Responder)
+    IDr(IdPayload),
+
+    /// Authentication payload
+    AUTH(AuthPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -136,6 +145,9 @@ impl IkePayload {
             IkePayload::SA(_) => PayloadType::SA,
             IkePayload::KE(_) => PayloadType::KE,
             IkePayload::Nonce(_) => PayloadType::Nonce,
+            IkePayload::IDi(_) => PayloadType::IDi,
+            IkePayload::IDr(_) => PayloadType::IDr,
+            IkePayload::AUTH(_) => PayloadType::AUTH,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -332,7 +344,7 @@ impl SaPayload {
     }
 
     /// Create from raw data (for backward compatibility)
-    pub fn from_raw(data: Vec<u8>) -> Self {
+    pub fn from_raw(_data: Vec<u8>) -> Self {
         // For now, store as empty proposals
         // In production, this would parse the raw data
         SaPayload {
@@ -341,7 +353,7 @@ impl SaPayload {
     }
 
     /// Parse SA payload from data (without header)
-    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+    pub fn from_payload_data(_data: &[u8]) -> Result<Self> {
         // For now, accept empty or any data
         // Full proposal parsing will be implemented when needed
         Ok(SaPayload {
@@ -376,6 +388,273 @@ impl SaPayload {
     /// Get proposals
     pub fn proposals(&self) -> &[Proposal] {
         &self.proposals
+    }
+}
+
+/// ID Type for Identification Payload (RFC 7296 Section 3.5)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IdType {
+    /// IPv4 address
+    Ipv4Addr = 1,
+    /// Fully-qualified domain name
+    Fqdn = 2,
+    /// RFC 822 email address
+    Rfc822Addr = 3,
+    /// IPv6 address
+    Ipv6Addr = 5,
+    /// Distinguished Name
+    DnBinaryDer = 9,
+    /// Distinguished Name
+    DnBinaryDerAsn1 = 10,
+    /// Key ID
+    KeyId = 11,
+}
+
+impl IdType {
+    /// Convert from u8
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(IdType::Ipv4Addr),
+            2 => Some(IdType::Fqdn),
+            3 => Some(IdType::Rfc822Addr),
+            5 => Some(IdType::Ipv6Addr),
+            9 => Some(IdType::DnBinaryDer),
+            10 => Some(IdType::DnBinaryDerAsn1),
+            11 => Some(IdType::KeyId),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Identification Payload (RFC 7296 Section 3.5)
+///
+/// Used for IDi (Initiator) and IDr (Responder) payloads.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Next Payload  |C|  RESERVED   |         Payload Length        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |   ID Type     |                 RESERVED                      |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                   Identification Data                         ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdPayload {
+    /// ID type
+    pub id_type: IdType,
+
+    /// Identification data
+    pub data: Vec<u8>,
+}
+
+impl IdPayload {
+    /// Create new ID payload
+    pub fn new(id_type: IdType, data: Vec<u8>) -> Self {
+        IdPayload { id_type, data }
+    }
+
+    /// Create ID from FQDN
+    pub fn from_fqdn(fqdn: &str) -> Self {
+        IdPayload {
+            id_type: IdType::Fqdn,
+            data: fqdn.as_bytes().to_vec(),
+        }
+    }
+
+    /// Create ID from email address
+    pub fn from_email(email: &str) -> Self {
+        IdPayload {
+            id_type: IdType::Rfc822Addr,
+            data: email.as_bytes().to_vec(),
+        }
+    }
+
+    /// Create ID from Key ID
+    pub fn from_key_id(key_id: &[u8]) -> Self {
+        IdPayload {
+            id_type: IdType::KeyId,
+            data: key_id.to_vec(),
+        }
+    }
+
+    /// Parse ID payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.len() < 4 {
+            return Err(Error::BufferTooShort {
+                required: 4,
+                available: data.len(),
+            });
+        }
+
+        // Parse ID type
+        let id_type = IdType::from_u8(data[0])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown ID type: {}", data[0])))?;
+
+        // Skip reserved bytes (1-3)
+        // ID data starts at byte 4
+        let id_data = data[4..].to_vec();
+
+        Ok(IdPayload {
+            id_type,
+            data: id_data,
+        })
+    }
+
+    /// Serialize ID payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + self.data.len());
+
+        // Write ID type
+        bytes.push(self.id_type.to_u8());
+
+        // Write reserved (3 bytes of zeros)
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8]);
+
+        // Write ID data
+        bytes.extend_from_slice(&self.data);
+
+        bytes
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        (PayloadHeader::SIZE + 4 + self.data.len()) as u16
+    }
+
+    /// Get ID as string (if applicable)
+    pub fn as_string(&self) -> Option<String> {
+        match self.id_type {
+            IdType::Fqdn | IdType::Rfc822Addr => String::from_utf8(self.data.clone()).ok(),
+            _ => None,
+        }
+    }
+}
+
+/// Authentication Method (RFC 7296 Section 3.8)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AuthMethod {
+    /// RSA Digital Signature
+    RsaSig = 1,
+    /// Shared Key Message Integrity Code
+    SharedKeyMic = 2,
+    /// DSS Digital Signature
+    DssSig = 3,
+    /// ECDSA with SHA-256 on P-256 curve
+    EcdsaSha256P256 = 9,
+    /// ECDSA with SHA-384 on P-384 curve
+    EcdsaSha384P384 = 10,
+    /// ECDSA with SHA-512 on P-521 curve
+    EcdsaSha512P521 = 11,
+}
+
+impl AuthMethod {
+    /// Convert from u8
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(AuthMethod::RsaSig),
+            2 => Some(AuthMethod::SharedKeyMic),
+            3 => Some(AuthMethod::DssSig),
+            9 => Some(AuthMethod::EcdsaSha256P256),
+            10 => Some(AuthMethod::EcdsaSha384P384),
+            11 => Some(AuthMethod::EcdsaSha512P521),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Authentication Payload (RFC 7296 Section 3.8)
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Next Payload  |C|  RESERVED   |         Payload Length        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Auth Method   |                RESERVED                       |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                      Authentication Data                      ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthPayload {
+    /// Authentication method
+    pub auth_method: AuthMethod,
+
+    /// Authentication data
+    pub auth_data: Vec<u8>,
+}
+
+impl AuthPayload {
+    /// Create new AUTH payload
+    pub fn new(auth_method: AuthMethod, auth_data: Vec<u8>) -> Self {
+        AuthPayload {
+            auth_method,
+            auth_data,
+        }
+    }
+
+    /// Parse AUTH payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.len() < 4 {
+            return Err(Error::BufferTooShort {
+                required: 4,
+                available: data.len(),
+            });
+        }
+
+        // Parse auth method
+        let auth_method = AuthMethod::from_u8(data[0]).ok_or_else(|| {
+            Error::InvalidPayload(format!("Unknown auth method: {}", data[0]))
+        })?;
+
+        // Skip reserved bytes (1-3)
+        // Auth data starts at byte 4
+        let auth_data = data[4..].to_vec();
+
+        Ok(AuthPayload {
+            auth_method,
+            auth_data,
+        })
+    }
+
+    /// Serialize AUTH payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + self.auth_data.len());
+
+        // Write auth method
+        bytes.push(self.auth_method.to_u8());
+
+        // Write reserved (3 bytes of zeros)
+        bytes.extend_from_slice(&[0u8, 0u8, 0u8]);
+
+        // Write auth data
+        bytes.extend_from_slice(&self.auth_data);
+
+        bytes
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        (PayloadHeader::SIZE + 4 + self.auth_data.len()) as u16
     }
 }
 
@@ -530,5 +809,100 @@ mod tests {
         ];
         let result = PayloadHeader::from_bytes(&data);
         assert!(matches!(result, Err(Error::InvalidLength { .. })));
+    }
+
+    // ID Payload tests
+
+    #[test]
+    fn test_id_payload_fqdn() {
+        let id = IdPayload::from_fqdn("vpn.example.com");
+        assert_eq!(id.id_type, IdType::Fqdn);
+        assert_eq!(id.as_string().unwrap(), "vpn.example.com");
+        assert_eq!(id.total_length(), 4 + 4 + 15); // header + id_type+reserved + data
+    }
+
+    #[test]
+    fn test_id_payload_email() {
+        let id = IdPayload::from_email("user@example.com");
+        assert_eq!(id.id_type, IdType::Rfc822Addr);
+        assert_eq!(id.as_string().unwrap(), "user@example.com");
+    }
+
+    #[test]
+    fn test_id_payload_key_id() {
+        let key_id = vec![0x01, 0x02, 0x03, 0x04];
+        let id = IdPayload::from_key_id(&key_id);
+        assert_eq!(id.id_type, IdType::KeyId);
+        assert_eq!(id.data, key_id);
+        assert!(id.as_string().is_none()); // Key ID is binary, not string
+    }
+
+    #[test]
+    fn test_id_payload_roundtrip() {
+        let original = IdPayload::from_fqdn("test.example.com");
+        let serialized = original.to_payload_data();
+        let parsed = IdPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.id_type, original.id_type);
+        assert_eq!(parsed.data, original.data);
+    }
+
+    #[test]
+    fn test_id_type_conversion() {
+        assert_eq!(IdType::from_u8(2), Some(IdType::Fqdn));
+        assert_eq!(IdType::from_u8(3), Some(IdType::Rfc822Addr));
+        assert_eq!(IdType::from_u8(11), Some(IdType::KeyId));
+        assert_eq!(IdType::from_u8(99), None);
+
+        assert_eq!(IdType::Fqdn.to_u8(), 2);
+    }
+
+    // AUTH Payload tests
+
+    #[test]
+    fn test_auth_payload_psk() {
+        let auth_data = vec![0xAA; 32]; // 32 bytes of 0xAA
+        let auth = AuthPayload::new(AuthMethod::SharedKeyMic, auth_data.clone());
+
+        assert_eq!(auth.auth_method, AuthMethod::SharedKeyMic);
+        assert_eq!(auth.auth_data, auth_data);
+        assert_eq!(auth.total_length(), 4 + 4 + 32); // header + method+reserved + data
+    }
+
+    #[test]
+    fn test_auth_payload_rsa() {
+        let auth_data = vec![0xBB; 256]; // RSA signature
+        let auth = AuthPayload::new(AuthMethod::RsaSig, auth_data.clone());
+
+        assert_eq!(auth.auth_method, AuthMethod::RsaSig);
+        assert_eq!(auth.auth_data.len(), 256);
+    }
+
+    #[test]
+    fn test_auth_payload_ecdsa() {
+        let auth_data = vec![0xCC; 64]; // ECDSA signature
+        let auth = AuthPayload::new(AuthMethod::EcdsaSha256P256, auth_data.clone());
+
+        assert_eq!(auth.auth_method, AuthMethod::EcdsaSha256P256);
+    }
+
+    #[test]
+    fn test_auth_payload_roundtrip() {
+        let original = AuthPayload::new(AuthMethod::SharedKeyMic, vec![1, 2, 3, 4, 5]);
+        let serialized = original.to_payload_data();
+        let parsed = AuthPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.auth_method, original.auth_method);
+        assert_eq!(parsed.auth_data, original.auth_data);
+    }
+
+    #[test]
+    fn test_auth_method_conversion() {
+        assert_eq!(AuthMethod::from_u8(1), Some(AuthMethod::RsaSig));
+        assert_eq!(AuthMethod::from_u8(2), Some(AuthMethod::SharedKeyMic));
+        assert_eq!(AuthMethod::from_u8(9), Some(AuthMethod::EcdsaSha256P256));
+        assert_eq!(AuthMethod::from_u8(99), None);
+
+        assert_eq!(AuthMethod::SharedKeyMic.to_u8(), 2);
     }
 }
