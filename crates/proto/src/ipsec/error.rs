@@ -74,6 +74,20 @@ pub enum Error {
         to: String,
     },
 
+    /// Missing required payload
+    MissingPayload(String),
+
+    /// Invalid exchange type
+    InvalidExchangeType,
+
+    /// Invalid message ID
+    InvalidMessageId {
+        /// Expected message ID
+        expected: u32,
+        /// Received message ID
+        received: u32,
+    },
+
     /// I/O error
     Io(String),
 
@@ -128,6 +142,15 @@ impl fmt::Display for Error {
             Error::InvalidState(msg) => write!(f, "Invalid state: {}", msg),
             Error::InvalidStateTransition { from, to } => {
                 write!(f, "Invalid state transition from {} to {}", from, to)
+            }
+            Error::MissingPayload(name) => write!(f, "Missing required payload: {}", name),
+            Error::InvalidExchangeType => write!(f, "Invalid exchange type"),
+            Error::InvalidMessageId { expected, received } => {
+                write!(
+                    f,
+                    "Invalid message ID: expected {}, received {}",
+                    expected, received
+                )
             }
             Error::Io(msg) => write!(f, "I/O error: {}", msg),
             Error::Internal(msg) => write!(f, "Internal error: {}", msg),
