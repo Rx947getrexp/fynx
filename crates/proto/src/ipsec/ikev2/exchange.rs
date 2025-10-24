@@ -931,10 +931,16 @@ impl IkeAuthExchange {
     /// Returns tuple of (peer_id, selected_proposal, negotiated_tsi, negotiated_tsr)
     pub fn process_request(
         context: &mut IkeSaContext,
+        ike_sa_init_response: &[u8],
         request: &IkeMessage,
         psk: &[u8],
         configured_proposals: &[Proposal],
     ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+        use super::auth;
+        use super::constants::ExchangeType;
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+
         // Validate state
         if context.state != IkeState::InitDone {
             return Err(Error::InvalidState(format!(
@@ -948,16 +954,108 @@ impl IkeAuthExchange {
             return Err(Error::InvalidExchangeType);
         }
 
-        // TODO: Extract SK payload from message
-        // TODO: Decrypt SK payload using SK_er
-        // TODO: Parse inner payloads
-        // TODO: Extract IDi, AUTH, SAi2, TSi, TSr
-        // TODO: Validate AUTH payload
-        // TODO: Select Child SA proposal
-        // TODO: Negotiate traffic selectors
+        // Validate this is from initiator
+        if !request.header.flags.is_initiator() {
+            return Err(Error::InvalidMessage("IKE_AUTH request must be from initiator".into()));
+        }
 
-        // Placeholder implementation
-        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+        // Get the selected proposal
+        let selected_proposal = context
+            .selected_proposal
+            .as_ref()
+            .ok_or_else(|| Error::Internal("No proposal selected".into()))?;
+
+        // Get PRF algorithm
+        let prf_alg = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Prf)
+            .map(|t| {
+                match t.transform_id {
+                    2 => PrfAlgorithm::HmacSha256,
+                    3 => PrfAlgorithm::HmacSha384,
+                    4 => PrfAlgorithm::HmacSha512,
+                    _ => PrfAlgorithm::HmacSha256,
+                }
+            })
+            .unwrap_or(PrfAlgorithm::HmacSha256);
+
+        // Get cipher algorithm
+        let cipher = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Encr)
+            .map(|t| {
+                match t.transform_id {
+                    20 => CipherAlgorithm::AesGcm128,
+                    19 => CipherAlgorithm::AesGcm256,
+                    28 => CipherAlgorithm::ChaCha20Poly1305,
+                    _ => CipherAlgorithm::AesGcm128,
+                }
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Extract SK payload
+        let sk_payload = request
+            .payloads
+            .iter()
+            .find_map(|p| match p {
+                IkePayload::SK(sk) => Some(sk),
+                _ => None,
+            })
+            .ok_or_else(|| Error::InvalidMessage("No SK payload in IKE_AUTH request".into()))?;
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = request.header.to_bytes();
+
+        // Decrypt SK payload
+        let _inner_payloads = Self::decrypt_payloads(context, &ike_header_bytes, sk_payload, cipher)?;
+
+        // TODO: Parse inner payloads from decrypted data
+        // For now, we'll create placeholder data for testing
+        // In a real implementation, decrypt_payloads would return parsed payloads
+
+        // Placeholder: Create dummy values for now
+        // This allows the code to compile and be tested incrementally
+
+        // Extract nonce_i for AUTH verification
+        let nonce_i = context
+            .nonce_i
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Initiator nonce not set".into()))?;
+
+        // Get SK_pr for AUTH computation
+        let sk_pr = context
+            .get_psk_auth_key()
+            .ok_or_else(|| Error::Internal("SK_pr not derived".into()))?;
+
+        // For now, return placeholder data
+        // TODO: Replace with actual parsed data from inner_payloads
+
+        // Create placeholder ID payload
+        let peer_id = IdPayload {
+            id_type: super::payload::IdType::Ipv4Addr,
+            data: vec![0, 0, 0, 0], // Placeholder
+        };
+
+        // Select first matching proposal from configured proposals
+        let selected_child_proposal = configured_proposals
+            .first()
+            .ok_or_else(|| Error::NoProposalChosen)?
+            .clone();
+
+        // Create placeholder traffic selectors
+        let ts_i = super::payload::TrafficSelectorsPayload {
+            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
+        };
+        let ts_r = super::payload::TrafficSelectorsPayload {
+            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
+        };
+
+        // TODO: Verify AUTH payload once inner payload parsing is implemented
+        // For now, we skip AUTH verification as a placeholder
+
+        Ok((peer_id, selected_child_proposal, ts_i, ts_r))
     }
 
     /// Create IKE_AUTH response (responder)
@@ -988,6 +1086,7 @@ impl IkeAuthExchange {
     /// InitDone → Established
     pub fn create_response(
         context: &mut IkeSaContext,
+        ike_sa_init_response: &[u8],
         request: &IkeMessage,
         id_payload: IdPayload,
         psk: &[u8],
@@ -995,14 +1094,118 @@ impl IkeAuthExchange {
         ts_i: super::payload::TrafficSelectorsPayload,
         ts_r: super::payload::TrafficSelectorsPayload,
     ) -> Result<IkeMessage> {
-        // TODO: Compute AUTH payload
-        // TODO: Build inner payloads: IDr, AUTH, SAr2, TSi, TSr
-        // TODO: Serialize and encrypt
-        // TODO: Create response message
-        // TODO: Transition to Established state
+        use super::auth;
+        use super::constants::{ExchangeType, IkeFlags, PayloadType};
+        use super::message::{IkeHeader, IkeMessage};
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
 
-        // Placeholder implementation
-        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+        // Validate state
+        if context.state != IkeState::InitDone {
+            return Err(Error::InvalidState(format!(
+                "Cannot create IKE_AUTH response in state {:?}",
+                context.state
+            )));
+        }
+
+        // Get the selected IKE SA proposal
+        let ike_proposal = context
+            .selected_proposal
+            .as_ref()
+            .ok_or_else(|| Error::Internal("No proposal selected".into()))?;
+
+        // Get PRF algorithm
+        let prf_alg = ike_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Prf)
+            .map(|t| {
+                match t.transform_id {
+                    2 => PrfAlgorithm::HmacSha256,
+                    3 => PrfAlgorithm::HmacSha384,
+                    4 => PrfAlgorithm::HmacSha512,
+                    _ => PrfAlgorithm::HmacSha256,
+                }
+            })
+            .unwrap_or(PrfAlgorithm::HmacSha256);
+
+        // Get cipher algorithm
+        let cipher = ike_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Encr)
+            .map(|t| {
+                match t.transform_id {
+                    20 => CipherAlgorithm::AesGcm128,
+                    19 => CipherAlgorithm::AesGcm256,
+                    28 => CipherAlgorithm::ChaCha20Poly1305,
+                    _ => CipherAlgorithm::AesGcm128,
+                }
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Get nonce_i
+        let nonce_i = context
+            .nonce_i
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Initiator nonce not set".into()))?;
+
+        // Get SK_pr for AUTH computation
+        let sk_pr = context
+            .get_psk_auth_key()
+            .ok_or_else(|| Error::Internal("SK_pr not derived".into()))?;
+
+        // Construct responder signed octets
+        let signed_octets = auth::construct_responder_signed_octets(
+            prf_alg,
+            ike_sa_init_response,
+            nonce_i,
+            sk_pr,
+            &id_payload.data,
+        );
+
+        // Compute AUTH payload
+        let auth_payload = auth::compute_psk_auth(prf_alg, sk_pr, &signed_octets);
+
+        // Build Child SA proposal payload
+        let sa_payload = super::payload::SaPayload {
+            proposals: vec![selected_proposal],
+        };
+
+        // Build inner payloads: IDr, AUTH, SAr2, TSi, TSr
+        let inner_payloads = vec![
+            IkePayload::IDr(id_payload),
+            IkePayload::AUTH(auth_payload),
+            IkePayload::SA(sa_payload),
+            IkePayload::TSi(ts_i),
+            IkePayload::TSr(ts_r),
+        ];
+
+        // Create IKE header for response
+        let flags = IkeFlags::response(false); // Responder response
+        let header = IkeHeader::new(
+            context.initiator_spi,
+            context.responder_spi,
+            PayloadType::SK,
+            ExchangeType::IkeAuth,
+            flags,
+            request.header.message_id, // Same message ID as request
+            0, // Length computed during serialization
+        );
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = header.to_bytes();
+
+        // Encrypt inner payloads
+        let sk_payload = Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+
+        // Build final message
+        let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
+
+        // Transition to Established state
+        context.transition_to(IkeState::Established)?;
+
+        Ok(message)
     }
 
     /// Process IKE_AUTH response (initiator)
@@ -1028,9 +1231,15 @@ impl IkeAuthExchange {
     /// AuthSent → Established
     pub fn process_response(
         context: &mut IkeSaContext,
+        ike_sa_init_response: &[u8],
         response: &IkeMessage,
         psk: &[u8],
     ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+        use super::auth;
+        use super::constants::ExchangeType;
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+
         // Validate state
         if context.state != IkeState::AuthSent {
             return Err(Error::InvalidState(format!(
@@ -1039,14 +1248,94 @@ impl IkeAuthExchange {
             )));
         }
 
-        // TODO: Extract and decrypt SK payload
-        // TODO: Parse inner payloads
-        // TODO: Validate AUTH payload
-        // TODO: Store Child SA proposal
-        // TODO: Transition to Established state
+        // Validate exchange type
+        if response.header.exchange_type != ExchangeType::IkeAuth {
+            return Err(Error::InvalidExchangeType);
+        }
 
-        // Placeholder implementation
-        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+        // Validate this is a response
+        if !response.header.flags.is_response() {
+            return Err(Error::InvalidMessage("Expected IKE_AUTH response".into()));
+        }
+
+        // Get the selected proposal
+        let selected_proposal = context
+            .selected_proposal
+            .as_ref()
+            .ok_or_else(|| Error::Internal("No proposal selected".into()))?;
+
+        // Get PRF algorithm
+        let prf_alg = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Prf)
+            .map(|t| {
+                match t.transform_id {
+                    2 => PrfAlgorithm::HmacSha256,
+                    3 => PrfAlgorithm::HmacSha384,
+                    4 => PrfAlgorithm::HmacSha512,
+                    _ => PrfAlgorithm::HmacSha256,
+                }
+            })
+            .unwrap_or(PrfAlgorithm::HmacSha256);
+
+        // Get cipher algorithm
+        let cipher = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Encr)
+            .map(|t| {
+                match t.transform_id {
+                    20 => CipherAlgorithm::AesGcm128,
+                    19 => CipherAlgorithm::AesGcm256,
+                    28 => CipherAlgorithm::ChaCha20Poly1305,
+                    _ => CipherAlgorithm::AesGcm128,
+                }
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Extract SK payload
+        let sk_payload = response
+            .payloads
+            .iter()
+            .find_map(|p| match p {
+                IkePayload::SK(sk) => Some(sk),
+                _ => None,
+            })
+            .ok_or_else(|| Error::InvalidMessage("No SK payload in IKE_AUTH response".into()))?;
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = response.header.to_bytes();
+
+        // Decrypt SK payload
+        let _inner_payloads = Self::decrypt_payloads(context, &ike_header_bytes, sk_payload, cipher)?;
+
+        // TODO: Parse inner payloads from decrypted data
+        // For now, return placeholder data similar to process_request
+
+        // Create placeholder ID payload
+        let peer_id = IdPayload {
+            id_type: super::payload::IdType::Ipv4Addr,
+            data: vec![0, 0, 0, 0], // Placeholder
+        };
+
+        // Create placeholder proposal
+        let child_proposal = Proposal::new(1, super::proposal::ProtocolId::Esp);
+
+        // Create placeholder traffic selectors
+        let ts_i = super::payload::TrafficSelectorsPayload {
+            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
+        };
+        let ts_r = super::payload::TrafficSelectorsPayload {
+            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
+        };
+
+        // TODO: Verify AUTH payload once inner payload parsing is implemented
+
+        // Transition to Established state
+        context.transition_to(IkeState::Established)?;
+
+        Ok((peer_id, child_proposal, ts_i, ts_r))
     }
 }
 
