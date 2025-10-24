@@ -132,6 +132,12 @@ pub enum IkePayload {
     /// Notify payload
     N(NotifyPayload),
 
+    /// Delete payload
+    D(DeletePayload),
+
+    /// Vendor ID payload
+    V(VendorIdPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -152,6 +158,8 @@ impl IkePayload {
             IkePayload::IDr(_) => PayloadType::IDr,
             IkePayload::AUTH(_) => PayloadType::AUTH,
             IkePayload::N(_) => PayloadType::N,
+            IkePayload::D(_) => PayloadType::D,
+            IkePayload::V(_) => PayloadType::V,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -963,6 +971,194 @@ impl NotifyPayload {
     }
 }
 
+/// DELETE payload (RFC 7296 Section 3.11)
+///
+/// Used to delete Security Associations.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Protocol ID   |   SPI Size    |           # of SPIs           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~               Security Parameter Index(es) (SPI)              ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletePayload {
+    /// Protocol ID (IKE, AH, ESP)
+    pub protocol_id: NotifyProtocolId,
+
+    /// SPI size in bytes
+    pub spi_size: u8,
+
+    /// List of SPIs to delete
+    pub spis: Vec<Vec<u8>>,
+}
+
+impl DeletePayload {
+    /// Create new DELETE payload
+    pub fn new(protocol_id: NotifyProtocolId, spi_size: u8, spis: Vec<Vec<u8>>) -> Self {
+        DeletePayload {
+            protocol_id,
+            spi_size,
+            spis,
+        }
+    }
+
+    /// Create DELETE for IKE SA (no SPIs)
+    pub fn delete_ike_sa() -> Self {
+        DeletePayload {
+            protocol_id: NotifyProtocolId::Ike,
+            spi_size: 0,
+            spis: Vec::new(),
+        }
+    }
+
+    /// Create DELETE for single ESP SA
+    pub fn delete_esp_sa(spi: Vec<u8>) -> Self {
+        let spi_size = spi.len() as u8;
+        DeletePayload {
+            protocol_id: NotifyProtocolId::Esp,
+            spi_size,
+            spis: vec![spi],
+        }
+    }
+
+    /// Parse DELETE payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.len() < 4 {
+            return Err(Error::BufferTooShort {
+                required: 4,
+                available: data.len(),
+            });
+        }
+
+        // Parse protocol ID
+        let protocol_id = NotifyProtocolId::from_u8(data[0])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown protocol ID: {}", data[0])))?;
+
+        // Parse SPI size
+        let spi_size = data[1];
+
+        // Parse number of SPIs (big-endian u16)
+        let num_spis = u16::from_be_bytes([data[2], data[3]]) as usize;
+
+        // Validate data length
+        let expected_length = 4 + (num_spis * spi_size as usize);
+        if data.len() < expected_length {
+            return Err(Error::BufferTooShort {
+                required: expected_length,
+                available: data.len(),
+            });
+        }
+
+        // Parse SPIs
+        let mut spis = Vec::with_capacity(num_spis);
+        let mut offset = 4;
+        for _ in 0..num_spis {
+            let spi = data[offset..offset + spi_size as usize].to_vec();
+            spis.push(spi);
+            offset += spi_size as usize;
+        }
+
+        Ok(DeletePayload {
+            protocol_id,
+            spi_size,
+            spis,
+        })
+    }
+
+    /// Serialize DELETE payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + self.spis.len() * self.spi_size as usize);
+
+        // Write protocol ID
+        bytes.push(self.protocol_id.to_u8());
+
+        // Write SPI size
+        bytes.push(self.spi_size);
+
+        // Write number of SPIs (big-endian)
+        let num_spis = (self.spis.len() as u16).to_be_bytes();
+        bytes.extend_from_slice(&num_spis);
+
+        // Write SPIs
+        for spi in &self.spis {
+            bytes.extend_from_slice(spi);
+        }
+
+        bytes
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        (PayloadHeader::SIZE + 4 + self.spis.len() * self.spi_size as usize) as u16
+    }
+
+    /// Get number of SPIs
+    pub fn spi_count(&self) -> usize {
+        self.spis.len()
+    }
+}
+
+/// VENDOR_ID payload (RFC 7296 Section 3.12)
+///
+/// Used to identify vendor-specific implementations.
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                        Vendor ID Data                         ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VendorIdPayload {
+    /// Vendor ID data
+    pub vendor_id: Vec<u8>,
+}
+
+impl VendorIdPayload {
+    /// Create new VENDOR_ID payload
+    pub fn new(vendor_id: Vec<u8>) -> Self {
+        VendorIdPayload { vendor_id }
+    }
+
+    /// Create VENDOR_ID from string
+    pub fn from_string(s: &str) -> Self {
+        VendorIdPayload {
+            vendor_id: s.as_bytes().to_vec(),
+        }
+    }
+
+    /// Parse VENDOR_ID payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        Ok(VendorIdPayload {
+            vendor_id: data.to_vec(),
+        })
+    }
+
+    /// Serialize VENDOR_ID payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        self.vendor_id.clone()
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        (PayloadHeader::SIZE + self.vendor_id.len()) as u16
+    }
+
+    /// Get vendor ID as string (if valid UTF-8)
+    pub fn as_string(&self) -> Option<String> {
+        String::from_utf8(self.vendor_id.clone()).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1355,5 +1551,133 @@ mod tests {
 
         assert_eq!(notify.notify_type, NotifyType::NatDetectionSourceIp);
         assert_eq!(notify.notification_data, hash_data);
+    }
+
+    // DELETE Payload Tests
+
+    #[test]
+    fn test_delete_ike_sa() {
+        let delete = DeletePayload::delete_ike_sa();
+
+        assert_eq!(delete.protocol_id, NotifyProtocolId::Ike);
+        assert_eq!(delete.spi_size, 0);
+        assert_eq!(delete.spi_count(), 0);
+        assert!(delete.spis.is_empty());
+    }
+
+    #[test]
+    fn test_delete_esp_sa() {
+        let spi = vec![0x11, 0x22, 0x33, 0x44];
+        let delete = DeletePayload::delete_esp_sa(spi.clone());
+
+        assert_eq!(delete.protocol_id, NotifyProtocolId::Esp);
+        assert_eq!(delete.spi_size, 4);
+        assert_eq!(delete.spi_count(), 1);
+        assert_eq!(delete.spis[0], spi);
+    }
+
+    #[test]
+    fn test_delete_multiple_spis() {
+        let spis = vec![
+            vec![0x11, 0x22, 0x33, 0x44],
+            vec![0x55, 0x66, 0x77, 0x88],
+            vec![0x99, 0xAA, 0xBB, 0xCC],
+        ];
+        let delete = DeletePayload::new(NotifyProtocolId::Esp, 4, spis.clone());
+
+        assert_eq!(delete.protocol_id, NotifyProtocolId::Esp);
+        assert_eq!(delete.spi_size, 4);
+        assert_eq!(delete.spi_count(), 3);
+        assert_eq!(delete.spis, spis);
+    }
+
+    #[test]
+    fn test_delete_roundtrip() {
+        let original = DeletePayload::new(
+            NotifyProtocolId::Esp,
+            4,
+            vec![vec![0x11, 0x22, 0x33, 0x44], vec![0x55, 0x66, 0x77, 0x88]],
+        );
+
+        let serialized = original.to_payload_data();
+        let parsed = DeletePayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.protocol_id, original.protocol_id);
+        assert_eq!(parsed.spi_size, original.spi_size);
+        assert_eq!(parsed.spis, original.spis);
+    }
+
+    #[test]
+    fn test_delete_total_length() {
+        let delete = DeletePayload::new(
+            NotifyProtocolId::Esp,
+            4,
+            vec![vec![0x11, 0x22, 0x33, 0x44], vec![0x55, 0x66, 0x77, 0x88]],
+        );
+
+        // Header (4) + Protocol (1) + SPI Size (1) + Num SPIs (2) + 2 SPIs (8) = 16
+        assert_eq!(delete.total_length(), 16);
+    }
+
+    #[test]
+    fn test_delete_empty_spis() {
+        let delete = DeletePayload::new(NotifyProtocolId::Ike, 0, Vec::new());
+
+        assert_eq!(delete.spi_count(), 0);
+        assert_eq!(delete.total_length(), 8); // Header (4) + 4 bytes
+    }
+
+    // VENDOR_ID Payload Tests
+
+    #[test]
+    fn test_vendor_id_new() {
+        let vendor_data = vec![0x01, 0x02, 0x03, 0x04];
+        let vendor_id = VendorIdPayload::new(vendor_data.clone());
+
+        assert_eq!(vendor_id.vendor_id, vendor_data);
+    }
+
+    #[test]
+    fn test_vendor_id_from_string() {
+        let vendor_str = "fynx-ipsec-v0.1.0";
+        let vendor_id = VendorIdPayload::from_string(vendor_str);
+
+        assert_eq!(vendor_id.vendor_id, vendor_str.as_bytes());
+        assert_eq!(vendor_id.as_string(), Some(vendor_str.to_string()));
+    }
+
+    #[test]
+    fn test_vendor_id_roundtrip() {
+        let original = VendorIdPayload::from_string("test-vendor-123");
+        let serialized = original.to_payload_data();
+        let parsed = VendorIdPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.vendor_id, original.vendor_id);
+        assert_eq!(parsed.as_string(), original.as_string());
+    }
+
+    #[test]
+    fn test_vendor_id_binary_data() {
+        let binary_data = vec![0xFF; 16];
+        let vendor_id = VendorIdPayload::new(binary_data.clone());
+
+        assert_eq!(vendor_id.vendor_id, binary_data);
+        assert!(vendor_id.as_string().is_none()); // Not valid UTF-8
+    }
+
+    #[test]
+    fn test_vendor_id_total_length() {
+        let vendor_id = VendorIdPayload::from_string("test");
+
+        // Header (4) + "test" (4) = 8
+        assert_eq!(vendor_id.total_length(), 8);
+    }
+
+    #[test]
+    fn test_vendor_id_empty() {
+        let vendor_id = VendorIdPayload::new(Vec::new());
+
+        assert!(vendor_id.vendor_id.is_empty());
+        assert_eq!(vendor_id.total_length(), 4); // Just header
     }
 }
