@@ -1059,7 +1059,7 @@ impl IkeAuthExchange {
 
         // Decrypt SK payload
         // In IKE_AUTH request, first payload is IDi
-        let _inner_payloads = Self::decrypt_payloads(
+        let inner_payloads = Self::decrypt_payloads(
             context,
             &ike_header_bytes,
             sk_payload,
@@ -1067,49 +1067,63 @@ impl IkeAuthExchange {
             PayloadType::IDi,
         )?;
 
-        // TODO: Parse inner payloads from decrypted data
-        // For now, we'll create placeholder data for testing
-        // In a real implementation, decrypt_payloads would return parsed payloads
+        // Extract payloads from inner_payloads
+        let mut peer_id: Option<IdPayload> = None;
+        let mut auth_payload: Option<super::payload::AuthPayload> = None;
+        let mut child_sa: Option<super::payload::SaPayload> = None;
+        let mut ts_i: Option<super::payload::TrafficSelectorsPayload> = None;
+        let mut ts_r: Option<super::payload::TrafficSelectorsPayload> = None;
 
-        // Placeholder: Create dummy values for now
-        // This allows the code to compile and be tested incrementally
+        for payload in &inner_payloads {
+            match payload {
+                IkePayload::IDi(id) => peer_id = Some(id.clone()),
+                IkePayload::AUTH(auth) => auth_payload = Some(auth.clone()),
+                IkePayload::SA(sa) => child_sa = Some(sa.clone()),
+                IkePayload::TSi(ts) => ts_i = Some(ts.clone()),
+                IkePayload::TSr(ts) => ts_r = Some(ts.clone()),
+                _ => {}, // Ignore other payloads (CERT, CERTREQ, etc.)
+            }
+        }
 
-        // Extract nonce_i for AUTH verification
+        // Validate required payloads are present
+        let peer_id = peer_id.ok_or_else(|| Error::InvalidMessage("Missing IDi payload".into()))?;
+        let auth_payload = auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
+        let child_sa = child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
+        let ts_i = ts_i.ok_or_else(|| Error::InvalidMessage("Missing TSi payload".into()))?;
+        let ts_r = ts_r.ok_or_else(|| Error::InvalidMessage("Missing TSr payload".into()))?;
+
+        // Verify AUTH payload
         let nonce_i = context
             .nonce_i
             .as_ref()
             .ok_or_else(|| Error::Internal("Initiator nonce not set".into()))?;
 
-        // Get SK_pr for AUTH computation
-        let sk_pr = context
+        let sk_pi = context
             .get_psk_auth_key()
-            .ok_or_else(|| Error::Internal("SK_pr not derived".into()))?;
+            .ok_or_else(|| Error::Internal("SK_pi not derived".into()))?;
 
-        // For now, return placeholder data
-        // TODO: Replace with actual parsed data from inner_payloads
+        // Construct signed octets for AUTH verification
+        let signed_octets = auth::construct_initiator_signed_octets(
+            prf_alg,
+            ike_sa_init_response,
+            nonce_i,
+            sk_pi,
+            &peer_id.data,
+        );
 
-        // Create placeholder ID payload
-        let peer_id = IdPayload {
-            id_type: super::payload::IdType::Ipv4Addr,
-            data: vec![0, 0, 0, 0], // Placeholder
-        };
+        // Compute expected AUTH
+        let expected_auth = auth::compute_psk_auth(prf_alg, sk_pi, &signed_octets);
 
-        // Select first matching proposal from configured proposals
-        let selected_child_proposal = configured_proposals
-            .first()
-            .ok_or_else(|| Error::NoProposalChosen)?
-            .clone();
+        // Verify AUTH matches
+        if auth_payload.auth_method != expected_auth.auth_method {
+            return Err(Error::AuthenticationFailed("AUTH method mismatch".into()));
+        }
+        if auth_payload.auth_data != expected_auth.auth_data {
+            return Err(Error::AuthenticationFailed("AUTH data mismatch".into()));
+        }
 
-        // Create placeholder traffic selectors
-        let ts_i = super::payload::TrafficSelectorsPayload {
-            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
-        };
-        let ts_r = super::payload::TrafficSelectorsPayload {
-            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
-        };
-
-        // TODO: Verify AUTH payload once inner payload parsing is implemented
-        // For now, we skip AUTH verification as a placeholder
+        // Select Child SA proposal
+        let selected_child_proposal = select_proposal(&child_sa.proposals, configured_proposals)?.clone();
 
         Ok((peer_id, selected_child_proposal, ts_i, ts_r))
     }
@@ -1145,7 +1159,7 @@ impl IkeAuthExchange {
         ike_sa_init_response: &[u8],
         request: &IkeMessage,
         id_payload: IdPayload,
-        psk: &[u8],
+        _psk: &[u8],
         selected_proposal: Proposal,
         ts_i: super::payload::TrafficSelectorsPayload,
         ts_r: super::payload::TrafficSelectorsPayload,
@@ -1289,7 +1303,7 @@ impl IkeAuthExchange {
         context: &mut IkeSaContext,
         ike_sa_init_response: &[u8],
         response: &IkeMessage,
-        psk: &[u8],
+        _psk: &[u8],
     ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
         use super::auth;
         use super::constants::ExchangeType;
@@ -1365,7 +1379,7 @@ impl IkeAuthExchange {
 
         // Decrypt SK payload
         // In IKE_AUTH response, first payload is IDr
-        let _inner_payloads = Self::decrypt_payloads(
+        let inner_payloads = Self::decrypt_payloads(
             context,
             &ike_header_bytes,
             sk_payload,
@@ -1373,27 +1387,67 @@ impl IkeAuthExchange {
             PayloadType::IDr,
         )?;
 
-        // TODO: Parse inner payloads from decrypted data
-        // For now, return placeholder data similar to process_request
+        // Extract payloads from inner_payloads
+        let mut peer_id: Option<IdPayload> = None;
+        let mut auth_payload: Option<super::payload::AuthPayload> = None;
+        let mut child_sa: Option<super::payload::SaPayload> = None;
+        let mut ts_i: Option<super::payload::TrafficSelectorsPayload> = None;
+        let mut ts_r: Option<super::payload::TrafficSelectorsPayload> = None;
 
-        // Create placeholder ID payload
-        let peer_id = IdPayload {
-            id_type: super::payload::IdType::Ipv4Addr,
-            data: vec![0, 0, 0, 0], // Placeholder
-        };
+        for payload in &inner_payloads {
+            match payload {
+                IkePayload::IDr(id) => peer_id = Some(id.clone()),
+                IkePayload::AUTH(auth) => auth_payload = Some(auth.clone()),
+                IkePayload::SA(sa) => child_sa = Some(sa.clone()),
+                IkePayload::TSi(ts) => ts_i = Some(ts.clone()),
+                IkePayload::TSr(ts) => ts_r = Some(ts.clone()),
+                _ => {}, // Ignore other payloads
+            }
+        }
 
-        // Create placeholder proposal
-        let child_proposal = Proposal::new(1, super::proposal::ProtocolId::Esp);
+        // Validate required payloads are present
+        let peer_id = peer_id.ok_or_else(|| Error::InvalidMessage("Missing IDr payload".into()))?;
+        let auth_payload = auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
+        let child_sa = child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
+        let ts_i = ts_i.ok_or_else(|| Error::InvalidMessage("Missing TSi payload".into()))?;
+        let ts_r = ts_r.ok_or_else(|| Error::InvalidMessage("Missing TSr payload".into()))?;
 
-        // Create placeholder traffic selectors
-        let ts_i = super::payload::TrafficSelectorsPayload {
-            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
-        };
-        let ts_r = super::payload::TrafficSelectorsPayload {
-            selectors: vec![super::payload::TrafficSelector::ipv4_any()],
-        };
+        // Verify AUTH payload
+        let nonce_r = context
+            .nonce_r
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Responder nonce not set".into()))?;
 
-        // TODO: Verify AUTH payload once inner payload parsing is implemented
+        let sk_pr = context
+            .get_psk_auth_key()
+            .ok_or_else(|| Error::Internal("SK_pr not derived".into()))?;
+
+        // Construct signed octets for AUTH verification
+        let signed_octets = auth::construct_responder_signed_octets(
+            prf_alg,
+            ike_sa_init_response,
+            nonce_r,
+            sk_pr,
+            &peer_id.data,
+        );
+
+        // Compute expected AUTH
+        let expected_auth = auth::compute_psk_auth(prf_alg, sk_pr, &signed_octets);
+
+        // Verify AUTH matches
+        if auth_payload.auth_method != expected_auth.auth_method {
+            return Err(Error::AuthenticationFailed("AUTH method mismatch".into()));
+        }
+        if auth_payload.auth_data != expected_auth.auth_data {
+            return Err(Error::AuthenticationFailed("AUTH data mismatch".into()));
+        }
+
+        // Extract the selected Child SA proposal (should be one that we proposed)
+        let child_proposal = child_sa
+            .proposals
+            .first()
+            .ok_or_else(|| Error::InvalidMessage("No Child SA proposal in response".into()))?
+            .clone();
 
         // Transition to Established state
         context.transition_to(IkeState::Established)?;
