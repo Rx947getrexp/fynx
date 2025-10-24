@@ -66,6 +66,14 @@ pub enum Error {
     /// State machine error
     InvalidState(String),
 
+    /// Invalid state transition
+    InvalidStateTransition {
+        /// Current state
+        from: String,
+        /// Target state
+        to: String,
+    },
+
     /// I/O error
     Io(String),
 
@@ -118,6 +126,9 @@ impl fmt::Display for Error {
             Error::InvalidSpi(spi) => write!(f, "Invalid SPI: 0x{:08x}", spi),
             Error::InvalidSequence(seq) => write!(f, "Invalid sequence number: {}", seq),
             Error::InvalidState(msg) => write!(f, "Invalid state: {}", msg),
+            Error::InvalidStateTransition { from, to } => {
+                write!(f, "Invalid state transition from {} to {}", from, to)
+            }
             Error::Io(msg) => write!(f, "I/O error: {}", msg),
             Error::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
