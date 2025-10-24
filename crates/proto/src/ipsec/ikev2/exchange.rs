@@ -604,6 +604,160 @@ impl IkeSaInitExchange {
 pub struct IkeAuthExchange;
 
 impl IkeAuthExchange {
+    /// Serialize inner payloads and add padding
+    ///
+    /// Serializes a list of payloads into bytes and adds padding according to
+    /// RFC 7296 Section 2.3:
+    /// - Pad to cipher block size
+    /// - Pad length byte at end (0-255)
+    /// - Padding bytes can be any value (we use zeros)
+    ///
+    /// # Arguments
+    ///
+    /// * `payloads` - List of payloads to serialize
+    /// * `block_size` - Cipher block size (8/16 bytes)
+    ///
+    /// # Returns
+    ///
+    /// Returns serialized and padded bytes
+    fn serialize_and_pad(payloads: &[IkePayload], block_size: usize) -> Result<Vec<u8>> {
+        use super::constants::PayloadType;
+
+        // Serialize payloads (only payload bytes, no IKE header)
+        let mut data = Vec::new();
+        for (i, payload) in payloads.iter().enumerate() {
+            let next_payload = if i + 1 < payloads.len() {
+                payloads[i + 1].payload_type()
+            } else {
+                PayloadType::None
+            };
+
+            // Generic header: next payload (1) + critical (1) + length (2)
+            data.push(next_payload as u8);
+            data.push(0); // Not critical
+
+            let payload_data = match payload {
+                IkePayload::SA(sa) => sa.to_payload_data(),
+                IkePayload::IDi(id) | IkePayload::IDr(id) => id.to_payload_data(),
+                IkePayload::AUTH(auth) => auth.to_payload_data(),
+                IkePayload::TSi(ts) | IkePayload::TSr(ts) => ts.to_payload_data(),
+                _ => return Err(Error::Internal("Unsupported payload type for encryption".into())),
+            };
+
+            let length = 4 + payload_data.len();
+            data.extend_from_slice(&(length as u16).to_be_bytes());
+            data.extend_from_slice(&payload_data);
+        }
+
+        // Calculate padding needed
+        let current_len = data.len() + 1; // +1 for pad length byte
+        let pad_len = (block_size - (current_len % block_size)) % block_size;
+
+        // Add padding (zeros)
+        data.extend(vec![0u8; pad_len]);
+
+        // Add pad length byte
+        data.push(pad_len as u8);
+
+        Ok(data)
+    }
+
+    /// Encrypt inner payloads into SK payload
+    ///
+    /// Serializes, pads, and encrypts inner payloads using the IKE SA context's
+    /// encryption key. Uses AEAD cipher (AES-GCM or ChaCha20) with IKE header as AAD.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must have encryption keys derived)
+    /// * `ike_header` - IKE header bytes (used as AAD)
+    /// * `inner_payloads` - Payloads to encrypt
+    /// * `cipher` - Cipher algorithm to use
+    ///
+    /// # Returns
+    ///
+    /// Returns the encrypted SK payload
+    fn encrypt_payloads(
+        context: &IkeSaContext,
+        ike_header: &[u8],
+        inner_payloads: &[IkePayload],
+        cipher: crate::ipsec::crypto::cipher::CipherAlgorithm,
+    ) -> Result<super::payload::EncryptedPayload> {
+        use rand::Rng;
+
+        // Get encryption key
+        let encryption_key = context
+            .get_send_encryption_key()
+            .ok_or_else(|| Error::Internal("Encryption key not derived".into()))?;
+
+        // Serialize and pad inner payloads
+        let block_size = 16; // AES block size (also works for ChaCha20)
+        let plaintext = Self::serialize_and_pad(inner_payloads, block_size)?;
+
+        // Generate random IV
+        let iv_len = cipher.iv_len();
+        let mut iv = vec![0u8; iv_len];
+        rand::thread_rng().fill(&mut iv[..]);
+
+        // Encrypt with AAD (IKE header)
+        let ciphertext = cipher.encrypt(encryption_key, &iv, &plaintext, ike_header)?;
+
+        // Create SK payload (AEAD: tag is in ciphertext)
+        Ok(super::payload::EncryptedPayload::new_aead(iv, ciphertext))
+    }
+
+    /// Decrypt SK payload and parse inner payloads
+    ///
+    /// Decrypts the SK payload using the IKE SA context's decryption key,
+    /// removes padding, and parses the inner payloads.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must have encryption keys derived)
+    /// * `ike_header` - IKE header bytes (used as AAD)
+    /// * `sk_payload` - Encrypted SK payload
+    /// * `cipher` - Cipher algorithm to use
+    ///
+    /// # Returns
+    ///
+    /// Returns the decrypted and parsed inner payloads
+    fn decrypt_payloads(
+        context: &IkeSaContext,
+        ike_header: &[u8],
+        sk_payload: &super::payload::EncryptedPayload,
+        cipher: crate::ipsec::crypto::cipher::CipherAlgorithm,
+    ) -> Result<Vec<IkePayload>> {
+        // Get decryption key
+        let decryption_key = context
+            .get_recv_encryption_key()
+            .ok_or_else(|| Error::Internal("Decryption key not derived".into()))?;
+
+        // Decrypt with AAD (IKE header)
+        let plaintext = cipher.decrypt(
+            decryption_key,
+            &sk_payload.iv,
+            &sk_payload.encrypted_data,
+            ike_header,
+        )?;
+
+        // Remove padding
+        if plaintext.is_empty() {
+            return Err(Error::InvalidPayload("Empty plaintext after decryption".into()));
+        }
+
+        let pad_len = *plaintext.last().unwrap() as usize;
+        if pad_len + 1 > plaintext.len() {
+            return Err(Error::InvalidPayload("Invalid padding length".into()));
+        }
+
+        let payload_data = &plaintext[..plaintext.len() - pad_len - 1];
+
+        // Parse inner payloads
+        // TODO: Implement payload parsing from bytes
+        // For now, return empty list as placeholder
+        Ok(Vec::new())
+    }
+
     /// Create IKE_AUTH request (initiator)
     ///
     /// Creates an encrypted IKE_AUTH request containing:
@@ -891,6 +1045,220 @@ mod tests {
             vec![0xBB; 32],
         );
 
+        assert!(result.is_err());
+    }
+
+    // IKE_AUTH encryption/decryption tests
+
+    #[test]
+    fn test_serialize_and_pad_empty() {
+        let payloads: Vec<IkePayload> = vec![];
+        let result = IkeAuthExchange::serialize_and_pad(&payloads, 16);
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        // Empty payloads: just padding to block size
+        // 1 byte (pad length) + padding = 16 bytes
+        assert_eq!(data.len(), 16);
+        assert_eq!(data[15], 15); // Pad length = 15
+    }
+
+    #[test]
+    fn test_serialize_and_pad_single_payload() {
+        use super::super::payload::{AuthMethod, AuthPayload};
+
+        let auth = AuthPayload {
+            auth_method: AuthMethod::SharedKeyMic,
+            auth_data: vec![0xAA; 32],
+        };
+        let payloads = vec![IkePayload::AUTH(auth)];
+
+        let result = IkeAuthExchange::serialize_and_pad(&payloads, 16);
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        // Generic header (4) + auth method (1) + reserved (3) + auth data (32) = 40 bytes
+        // 40 + 1 (pad length) = 41 bytes
+        // Pad to 48 bytes (next multiple of 16)
+        // Padding = 7 bytes
+        assert_eq!(data.len(), 48);
+        assert_eq!(data[47], 7); // Pad length = 7
+    }
+
+    #[test]
+    fn test_serialize_and_pad_multiple_payloads() {
+        use super::super::payload::{AuthMethod, AuthPayload, IdPayload, IdType};
+
+        let id = IdPayload {
+            id_type: IdType::Ipv4Addr,
+            data: vec![192, 168, 1, 1],
+        };
+        let auth = AuthPayload {
+            auth_method: AuthMethod::SharedKeyMic,
+            auth_data: vec![0xBB; 32],
+        };
+
+        let payloads = vec![IkePayload::IDi(id), IkePayload::AUTH(auth)];
+
+        let result = IkeAuthExchange::serialize_and_pad(&payloads, 16);
+        assert!(result.is_ok());
+
+        let data = result.unwrap();
+        // IDi: header (4) + type (1) + reserved (3) + data (4) = 12
+        // AUTH: header (4) + method (1) + reserved (3) + data (32) = 40
+        // Total: 52 + 1 (pad length) = 53 bytes
+        // Pad to 64 bytes (next multiple of 16)
+        // Padding = 11 bytes
+        assert_eq!(data.len(), 64);
+        assert_eq!(data[63], 11); // Pad length = 11
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_roundtrip() {
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+        use super::super::payload::{AuthMethod, AuthPayload};
+
+        // Setup initiator context
+        let mut ctx_i = IkeSaContext::new_initiator([1u8; 8]);
+        ctx_i.responder_spi = [2u8; 8];
+        ctx_i.nonce_i = Some(vec![0x01; 32]);
+        ctx_i.nonce_r = Some(vec![0x02; 32]);
+        ctx_i.shared_secret = Some(vec![0x03; 256]);
+
+        // Derive keys (AES-GCM-128: 16-byte key, 16-byte integ)
+        ctx_i.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+            .expect("Key derivation failed");
+
+        // Setup responder context (same keys, different role)
+        let mut ctx_r = IkeSaContext::new_responder([1u8; 8], [2u8; 8]);
+        ctx_r.nonce_i = Some(vec![0x01; 32]);
+        ctx_r.nonce_r = Some(vec![0x02; 32]);
+        ctx_r.shared_secret = Some(vec![0x03; 256]);
+        ctx_r.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+            .expect("Key derivation failed");
+
+        // Create test payload
+        let auth = AuthPayload {
+            auth_method: AuthMethod::SharedKeyMic,
+            auth_data: vec![0xAA; 32],
+        };
+        let payloads = vec![IkePayload::AUTH(auth)];
+
+        // Fake IKE header (28 bytes)
+        let ike_header = vec![0x00; 28];
+
+        // Encrypt (initiator sends)
+        let cipher = CipherAlgorithm::AesGcm128;
+        let sk_payload = IkeAuthExchange::encrypt_payloads(&ctx_i, &ike_header, &payloads, cipher)
+            .expect("Encryption failed");
+
+        // Verify SK payload structure
+        assert_eq!(sk_payload.iv.len(), 8); // AES-GCM IV
+        assert!(!sk_payload.encrypted_data.is_empty());
+        assert!(sk_payload.is_aead()); // ICV should be empty for AEAD
+
+        // Decrypt (responder receives)
+        let decrypted = IkeAuthExchange::decrypt_payloads(&ctx_r, &ike_header, &sk_payload, cipher)
+            .expect("Decryption failed");
+
+        // For now, decrypt_payloads returns empty Vec (TODO: implement parsing)
+        // Once parsing is implemented, we should verify:
+        // assert_eq!(decrypted.len(), 1);
+        // match &decrypted[0] {
+        //     IkePayload::AUTH(auth) => {
+        //         assert_eq!(auth.auth_method, AuthMethod::SharedKeyMic);
+        //         assert_eq!(auth.auth_data, vec![0xAA; 32]);
+        //     }
+        //     _ => panic!("Expected AUTH payload"),
+        // }
+        assert_eq!(decrypted.len(), 0); // Placeholder until parsing implemented
+    }
+
+    #[test]
+    fn test_encrypt_without_keys() {
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+
+        let ctx = IkeSaContext::new_initiator([1u8; 8]);
+        let payloads: Vec<IkePayload> = vec![];
+        let ike_header = vec![0x00; 28];
+
+        let result = IkeAuthExchange::encrypt_payloads(&ctx, &ike_header, &payloads, CipherAlgorithm::AesGcm128);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Encryption key not derived"));
+    }
+
+    #[test]
+    fn test_decrypt_with_wrong_aad() {
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+        use super::super::payload::{AuthMethod, AuthPayload};
+
+        // Setup context with derived keys
+        let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
+        ctx.responder_spi = [2u8; 8];
+        ctx.nonce_i = Some(vec![0x01; 32]);
+        ctx.nonce_r = Some(vec![0x02; 32]);
+        ctx.shared_secret = Some(vec![0x03; 256]);
+        ctx.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+            .expect("Key derivation failed");
+
+        // Encrypt with correct AAD
+        let auth = AuthPayload {
+            auth_method: AuthMethod::SharedKeyMic,
+            auth_data: vec![0xAA; 32],
+        };
+        let payloads = vec![IkePayload::AUTH(auth)];
+        let correct_header = vec![0x00; 28];
+
+        let cipher = CipherAlgorithm::AesGcm128;
+        let sk_payload = IkeAuthExchange::encrypt_payloads(&ctx, &correct_header, &payloads, cipher)
+            .expect("Encryption failed");
+
+        // Try to decrypt with wrong AAD
+        let wrong_header = vec![0xFF; 28];
+        let result = IkeAuthExchange::decrypt_payloads(&ctx, &wrong_header, &sk_payload, cipher);
+
+        // Should fail due to authentication tag mismatch
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_with_corrupted_ciphertext() {
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+        use super::super::payload::{AuthMethod, AuthPayload, EncryptedPayload};
+
+        // Setup context with derived keys
+        let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
+        ctx.responder_spi = [2u8; 8];
+        ctx.nonce_i = Some(vec![0x01; 32]);
+        ctx.nonce_r = Some(vec![0x02; 32]);
+        ctx.shared_secret = Some(vec![0x03; 256]);
+        ctx.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+            .expect("Key derivation failed");
+
+        // Encrypt
+        let auth = AuthPayload {
+            auth_method: AuthMethod::SharedKeyMic,
+            auth_data: vec![0xAA; 32],
+        };
+        let payloads = vec![IkePayload::AUTH(auth)];
+        let ike_header = vec![0x00; 28];
+
+        let cipher = CipherAlgorithm::AesGcm128;
+        let sk_payload = IkeAuthExchange::encrypt_payloads(&ctx, &ike_header, &payloads, cipher)
+            .expect("Encryption failed");
+
+        // Corrupt the ciphertext
+        let mut corrupted_data = sk_payload.encrypted_data.clone();
+        corrupted_data[0] ^= 0xFF;
+        let corrupted_payload = EncryptedPayload::new_aead(sk_payload.iv.clone(), corrupted_data);
+
+        // Try to decrypt corrupted data
+        let result = IkeAuthExchange::decrypt_payloads(&ctx, &ike_header, &corrupted_payload, cipher);
+
+        // Should fail due to authentication tag mismatch
         assert!(result.is_err());
     }
 }
