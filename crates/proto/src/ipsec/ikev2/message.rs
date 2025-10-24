@@ -337,6 +337,7 @@ impl IkeMessage {
                 IkePayload::IDi(id) => id.total_length() as usize,
                 IkePayload::IDr(id) => id.total_length() as usize,
                 IkePayload::AUTH(auth) => auth.total_length() as usize,
+                IkePayload::N(notify) => notify.total_length() as usize,
                 IkePayload::Unknown { data, .. } => PayloadHeader::SIZE + data.len(),
             })
             .sum();
@@ -386,6 +387,11 @@ impl IkeMessage {
                 PayloadType::AUTH,
                 auth.to_payload_data(),
                 auth.total_length(),
+            ),
+            IkePayload::N(notify) => (
+                PayloadType::N,
+                notify.to_payload_data(),
+                notify.total_length(),
             ),
             IkePayload::Unknown { payload_type, data } => {
                 (*payload_type, data.clone(), (PayloadHeader::SIZE + data.len()) as u16)

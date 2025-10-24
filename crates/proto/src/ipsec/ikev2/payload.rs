@@ -129,6 +129,9 @@ pub enum IkePayload {
     /// Authentication payload
     AUTH(AuthPayload),
 
+    /// Notify payload
+    N(NotifyPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -148,6 +151,7 @@ impl IkePayload {
             IkePayload::IDi(_) => PayloadType::IDi,
             IkePayload::IDr(_) => PayloadType::IDr,
             IkePayload::AUTH(_) => PayloadType::AUTH,
+            IkePayload::N(_) => PayloadType::N,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -658,6 +662,307 @@ impl AuthPayload {
     }
 }
 
+/// Notify Message Types (RFC 7296 Section 3.10.1)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum NotifyType {
+    // Error Types (1-16383)
+    /// Unsupported critical payload
+    UnsupportedCriticalPayload = 1,
+    /// Invalid IKE SPI
+    InvalidIkeSpi = 4,
+    /// Invalid major version
+    InvalidMajorVersion = 5,
+    /// Invalid syntax
+    InvalidSyntax = 7,
+    /// Invalid message ID
+    InvalidMessageId = 9,
+    /// Invalid SPI
+    InvalidSpi = 11,
+    /// No proposal chosen
+    NoProposalChosen = 14,
+    /// Invalid KE payload
+    InvalidKePayload = 17,
+    /// Authentication failed
+    AuthenticationFailed = 24,
+    /// Single pair required
+    SinglePairRequired = 34,
+    /// No additional SAs
+    NoAdditionalSas = 35,
+    /// Internal address failure
+    InternalAddressFailure = 36,
+    /// Failed CP required
+    FailedCpRequired = 37,
+    /// TS unacceptable
+    TsUnacceptable = 38,
+    /// Invalid selectors
+    InvalidSelectors = 39,
+    /// Temporary failure
+    TemporaryFailure = 43,
+    /// Child SA not found
+    ChildSaNotFound = 44,
+
+    // Status Types (16384-65535)
+    /// Initial contact
+    InitialContact = 16384,
+    /// Set window size
+    SetWindowSize = 16385,
+    /// Additional TS possible
+    AdditionalTsPossible = 16386,
+    /// IPComp supported
+    IpcompSupported = 16387,
+    /// NAT detection source IP
+    NatDetectionSourceIp = 16388,
+    /// NAT detection destination IP
+    NatDetectionDestinationIp = 16389,
+    /// Cookie
+    Cookie = 16390,
+    /// Use transport mode
+    UseTransportMode = 16391,
+    /// HTTP cert lookup supported
+    HttpCertLookupSupported = 16392,
+    /// Rekey SA
+    RekeySa = 16393,
+    /// ESP TFC padding not supported
+    EspTfcPaddingNotSupported = 16394,
+    /// Non first fragments also
+    NonFirstFragmentsAlso = 16395,
+}
+
+impl NotifyType {
+    /// Convert from u16
+    pub fn from_u16(value: u16) -> Option<Self> {
+        match value {
+            1 => Some(NotifyType::UnsupportedCriticalPayload),
+            4 => Some(NotifyType::InvalidIkeSpi),
+            5 => Some(NotifyType::InvalidMajorVersion),
+            7 => Some(NotifyType::InvalidSyntax),
+            9 => Some(NotifyType::InvalidMessageId),
+            11 => Some(NotifyType::InvalidSpi),
+            14 => Some(NotifyType::NoProposalChosen),
+            17 => Some(NotifyType::InvalidKePayload),
+            24 => Some(NotifyType::AuthenticationFailed),
+            34 => Some(NotifyType::SinglePairRequired),
+            35 => Some(NotifyType::NoAdditionalSas),
+            36 => Some(NotifyType::InternalAddressFailure),
+            37 => Some(NotifyType::FailedCpRequired),
+            38 => Some(NotifyType::TsUnacceptable),
+            39 => Some(NotifyType::InvalidSelectors),
+            43 => Some(NotifyType::TemporaryFailure),
+            44 => Some(NotifyType::ChildSaNotFound),
+            16384 => Some(NotifyType::InitialContact),
+            16385 => Some(NotifyType::SetWindowSize),
+            16386 => Some(NotifyType::AdditionalTsPossible),
+            16387 => Some(NotifyType::IpcompSupported),
+            16388 => Some(NotifyType::NatDetectionSourceIp),
+            16389 => Some(NotifyType::NatDetectionDestinationIp),
+            16390 => Some(NotifyType::Cookie),
+            16391 => Some(NotifyType::UseTransportMode),
+            16392 => Some(NotifyType::HttpCertLookupSupported),
+            16393 => Some(NotifyType::RekeySa),
+            16394 => Some(NotifyType::EspTfcPaddingNotSupported),
+            16395 => Some(NotifyType::NonFirstFragmentsAlso),
+            _ => None,
+        }
+    }
+
+    /// Convert to u16
+    pub fn to_u16(self) -> u16 {
+        self as u16
+    }
+
+    /// Check if this is an error notification
+    pub fn is_error(self) -> bool {
+        (self as u16) < 16384
+    }
+
+    /// Check if this is a status notification
+    pub fn is_status(self) -> bool {
+        (self as u16) >= 16384
+    }
+}
+
+/// Protocol ID for NOTIFY payload (RFC 7296 Section 3.10)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum NotifyProtocolId {
+    /// No protocol (0)
+    None = 0,
+    /// IKE (1)
+    Ike = 1,
+    /// AH (2)
+    Ah = 2,
+    /// ESP (3)
+    Esp = 3,
+}
+
+impl NotifyProtocolId {
+    /// Convert from u8
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(NotifyProtocolId::None),
+            1 => Some(NotifyProtocolId::Ike),
+            2 => Some(NotifyProtocolId::Ah),
+            3 => Some(NotifyProtocolId::Esp),
+            _ => None,
+        }
+    }
+
+    /// Convert to u8
+    pub fn to_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// NOTIFY payload (RFC 7296 Section 3.10)
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Protocol ID   |   SPI Size    |      Notify Message Type      |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                Security Parameter Index (SPI)                 ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                       Notification Data                       ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyPayload {
+    /// Protocol ID
+    pub protocol_id: NotifyProtocolId,
+
+    /// Notification message type
+    pub notify_type: NotifyType,
+
+    /// Security Parameter Index (SPI)
+    pub spi: Vec<u8>,
+
+    /// Notification data
+    pub notification_data: Vec<u8>,
+}
+
+impl NotifyPayload {
+    /// Create new NOTIFY payload
+    pub fn new(
+        protocol_id: NotifyProtocolId,
+        notify_type: NotifyType,
+        spi: Vec<u8>,
+        notification_data: Vec<u8>,
+    ) -> Self {
+        NotifyPayload {
+            protocol_id,
+            notify_type,
+            spi,
+            notification_data,
+        }
+    }
+
+    /// Create simple error notification (no SPI, no data)
+    pub fn error(notify_type: NotifyType) -> Self {
+        NotifyPayload {
+            protocol_id: NotifyProtocolId::None,
+            notify_type,
+            spi: Vec::new(),
+            notification_data: Vec::new(),
+        }
+    }
+
+    /// Create status notification with data
+    pub fn status(notify_type: NotifyType, data: Vec<u8>) -> Self {
+        NotifyPayload {
+            protocol_id: NotifyProtocolId::None,
+            notify_type,
+            spi: Vec::new(),
+            notification_data: data,
+        }
+    }
+
+    /// Parse NOTIFY payload from data (without header)
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.len() < 4 {
+            return Err(Error::BufferTooShort {
+                required: 4,
+                available: data.len(),
+            });
+        }
+
+        // Parse protocol ID
+        let protocol_id = NotifyProtocolId::from_u8(data[0])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown protocol ID: {}", data[0])))?;
+
+        // Parse SPI size
+        let spi_size = data[1] as usize;
+
+        // Parse notify type (big-endian u16)
+        let notify_type_value = u16::from_be_bytes([data[2], data[3]]);
+        let notify_type = NotifyType::from_u16(notify_type_value).ok_or_else(|| {
+            Error::InvalidPayload(format!("Unknown notify type: {}", notify_type_value))
+        })?;
+
+        // Parse SPI
+        if data.len() < 4 + spi_size {
+            return Err(Error::BufferTooShort {
+                required: 4 + spi_size,
+                available: data.len(),
+            });
+        }
+        let spi = data[4..4 + spi_size].to_vec();
+
+        // Parse notification data
+        let notification_data = data[4 + spi_size..].to_vec();
+
+        Ok(NotifyPayload {
+            protocol_id,
+            notify_type,
+            spi,
+            notification_data,
+        })
+    }
+
+    /// Serialize NOTIFY payload to bytes (without header)
+    pub fn to_payload_data(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + self.spi.len() + self.notification_data.len());
+
+        // Write protocol ID
+        bytes.push(self.protocol_id.to_u8());
+
+        // Write SPI size
+        bytes.push(self.spi.len() as u8);
+
+        // Write notify type (big-endian)
+        let notify_type_bytes = self.notify_type.to_u16().to_be_bytes();
+        bytes.extend_from_slice(&notify_type_bytes);
+
+        // Write SPI
+        bytes.extend_from_slice(&self.spi);
+
+        // Write notification data
+        bytes.extend_from_slice(&self.notification_data);
+
+        bytes
+    }
+
+    /// Get total payload length (header + data)
+    pub fn total_length(&self) -> u16 {
+        (PayloadHeader::SIZE + 4 + self.spi.len() + self.notification_data.len()) as u16
+    }
+
+    /// Check if this is an error notification
+    pub fn is_error(&self) -> bool {
+        self.notify_type.is_error()
+    }
+
+    /// Check if this is a status notification
+    pub fn is_status(&self) -> bool {
+        self.notify_type.is_status()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -904,5 +1209,151 @@ mod tests {
         assert_eq!(AuthMethod::from_u8(99), None);
 
         assert_eq!(AuthMethod::SharedKeyMic.to_u8(), 2);
+    }
+
+    // NOTIFY Payload Tests
+
+    #[test]
+    fn test_notify_type_error() {
+        assert!(NotifyType::NoProposalChosen.is_error());
+        assert!(!NotifyType::NoProposalChosen.is_status());
+        assert_eq!(NotifyType::NoProposalChosen.to_u16(), 14);
+    }
+
+    #[test]
+    fn test_notify_type_status() {
+        assert!(NotifyType::InitialContact.is_status());
+        assert!(!NotifyType::InitialContact.is_error());
+        assert_eq!(NotifyType::InitialContact.to_u16(), 16384);
+    }
+
+    #[test]
+    fn test_notify_type_conversion() {
+        assert_eq!(NotifyType::from_u16(14), Some(NotifyType::NoProposalChosen));
+        assert_eq!(
+            NotifyType::from_u16(16384),
+            Some(NotifyType::InitialContact)
+        );
+        assert_eq!(NotifyType::from_u16(65000), None); // Unknown notify type
+    }
+
+    #[test]
+    fn test_notify_protocol_id_conversion() {
+        assert_eq!(
+            NotifyProtocolId::from_u8(0),
+            Some(NotifyProtocolId::None)
+        );
+        assert_eq!(NotifyProtocolId::from_u8(1), Some(NotifyProtocolId::Ike));
+        assert_eq!(NotifyProtocolId::from_u8(3), Some(NotifyProtocolId::Esp));
+        assert_eq!(NotifyProtocolId::from_u8(99), None);
+
+        assert_eq!(NotifyProtocolId::Esp.to_u8(), 3);
+    }
+
+    #[test]
+    fn test_notify_simple_error() {
+        let notify = NotifyPayload::error(NotifyType::AuthenticationFailed);
+
+        assert_eq!(notify.protocol_id, NotifyProtocolId::None);
+        assert_eq!(notify.notify_type, NotifyType::AuthenticationFailed);
+        assert!(notify.spi.is_empty());
+        assert!(notify.notification_data.is_empty());
+        assert!(notify.is_error());
+        assert!(!notify.is_status());
+    }
+
+    #[test]
+    fn test_notify_status_with_data() {
+        let data = vec![1, 2, 3, 4];
+        let notify = NotifyPayload::status(NotifyType::InitialContact, data.clone());
+
+        assert_eq!(notify.protocol_id, NotifyProtocolId::None);
+        assert_eq!(notify.notify_type, NotifyType::InitialContact);
+        assert!(notify.spi.is_empty());
+        assert_eq!(notify.notification_data, data);
+        assert!(!notify.is_error());
+        assert!(notify.is_status());
+    }
+
+    #[test]
+    fn test_notify_with_spi() {
+        let spi = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let notify = NotifyPayload::new(
+            NotifyProtocolId::Esp,
+            NotifyType::InvalidSpi,
+            spi.clone(),
+            Vec::new(),
+        );
+
+        assert_eq!(notify.protocol_id, NotifyProtocolId::Esp);
+        assert_eq!(notify.notify_type, NotifyType::InvalidSpi);
+        assert_eq!(notify.spi, spi);
+    }
+
+    #[test]
+    fn test_notify_roundtrip() {
+        let original = NotifyPayload::new(
+            NotifyProtocolId::Ike,
+            NotifyType::NoProposalChosen,
+            Vec::new(),
+            vec![1, 2, 3],
+        );
+
+        let serialized = original.to_payload_data();
+        let parsed = NotifyPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.protocol_id, original.protocol_id);
+        assert_eq!(parsed.notify_type, original.notify_type);
+        assert_eq!(parsed.spi, original.spi);
+        assert_eq!(parsed.notification_data, original.notification_data);
+    }
+
+    #[test]
+    fn test_notify_roundtrip_with_spi() {
+        let original = NotifyPayload::new(
+            NotifyProtocolId::Esp,
+            NotifyType::ChildSaNotFound,
+            vec![0x11, 0x22, 0x33, 0x44],
+            vec![0xAA, 0xBB],
+        );
+
+        let serialized = original.to_payload_data();
+        let parsed = NotifyPayload::from_payload_data(&serialized).unwrap();
+
+        assert_eq!(parsed.protocol_id, original.protocol_id);
+        assert_eq!(parsed.notify_type, original.notify_type);
+        assert_eq!(parsed.spi, original.spi);
+        assert_eq!(parsed.notification_data, original.notification_data);
+    }
+
+    #[test]
+    fn test_notify_total_length() {
+        let notify = NotifyPayload::new(
+            NotifyProtocolId::None,
+            NotifyType::InitialContact,
+            Vec::new(),
+            vec![1, 2, 3, 4, 5],
+        );
+
+        // Header (4) + Protocol (1) + SPI Size (1) + Notify Type (2) + Data (5) = 13
+        assert_eq!(notify.total_length(), 13);
+    }
+
+    #[test]
+    fn test_notify_cookie() {
+        let cookie_data = vec![0xFF; 20];
+        let notify = NotifyPayload::status(NotifyType::Cookie, cookie_data.clone());
+
+        assert_eq!(notify.notify_type, NotifyType::Cookie);
+        assert_eq!(notify.notification_data, cookie_data);
+    }
+
+    #[test]
+    fn test_notify_nat_detection() {
+        let hash_data = vec![0xAA; 20]; // SHA1 hash
+        let notify = NotifyPayload::status(NotifyType::NatDetectionSourceIp, hash_data.clone());
+
+        assert_eq!(notify.notify_type, NotifyType::NatDetectionSourceIp);
+        assert_eq!(notify.notification_data, hash_data);
     }
 }
