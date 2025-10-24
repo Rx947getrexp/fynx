@@ -49,3 +49,6 @@
 
 #[cfg(feature = "ssh")]
 pub mod ssh;
+
+#[cfg(feature = "ipsec")]
+pub mod ipsec;
