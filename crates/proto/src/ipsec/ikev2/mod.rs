@@ -36,12 +36,14 @@
 //!
 //! - [RFC 7296](https://datatracker.ietf.org/doc/html/rfc7296) - IKEv2 Protocol
 
+pub mod auth;
 pub mod constants;
 pub mod message;
 pub mod payload;
 pub mod proposal;
 pub mod state;
 
+pub use auth::*;
 pub use constants::*;
 pub use message::*;
 pub use payload::*;
