@@ -64,6 +64,7 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod crypto;
 pub mod error;
 pub mod ikev2;
 
