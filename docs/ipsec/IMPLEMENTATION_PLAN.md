@@ -182,32 +182,36 @@ fn test_parse_ike_sa_init_request() {
 
 ---
 
-### Stage 2: IKEv2 State Machine & SA Negotiation (Week 3-4) ✅ PARTIALLY COMPLETED
+### Stage 2: IKEv2 State Machine & SA Negotiation (Week 3-4) ✅ MOSTLY COMPLETED
 
-**Status**: ✅ Core components completed
-**Commits**: 862f3a5, 2c28ce9, 9a45913, 7b0f31c
+**Status**: ✅ IKE_SA_INIT exchange completed, IKE_AUTH pending
+**Commits**: 862f3a5, 2c28ce9, 9a45913, 7b0f31c, 65db610
 
 **Goal**: Implement IKE_SA_INIT and IKE_AUTH exchanges
 
 **Deliverables**:
 - [x] IKEv2 state machine
-- [ ] IKE_SA_INIT exchange (initial handshake) - payloads ready
-- [ ] IKE_AUTH exchange (authentication) - payloads ready
+- [x] IKE_SA_INIT exchange (initial handshake) - fully implemented
+- [ ] IKE_AUTH exchange (authentication) - payloads ready, exchange handler pending
 - [x] Proposal selection algorithm
 - [ ] Cookie mechanism (DoS protection) - deferred
-- [x] Unit tests (20 tests - core logic)
+- [x] Unit tests (26 tests - core logic + exchange)
 
 **Success Criteria**:
 - ✅ State machine handles Initiator/Responder flows
 - ✅ Support multiple cipher suites via Proposal/Transform
 - ✅ Handle invalid proposals gracefully (NoProposalChosen error)
+- ✅ IKE_SA_INIT request/response creation and processing
+- ✅ Message ID validation and tracking
+- ⏳ IKE_AUTH exchange (pending)
 
 **Actual Implementation**:
 - Part 1 (862f3a5): IKE SA state machine - 9 tests
 - Part 2 (2c28ce9): Proposal/Transform structures - 11 tests
 - Part 3 (9a45913): SA Payload enhancement - 2 tests
 - Part 4 (7b0f31c): ID and AUTH payloads - 10 tests
-- Total: 32 tests (20 state/negotiation + 12 payload)
+- Part 5 (65db610): IKE_SA_INIT exchange handler - 6 tests
+- Total: 38 tests (26 state/negotiation/exchange + 12 payload)
 
 **State Machine**:
 ```
