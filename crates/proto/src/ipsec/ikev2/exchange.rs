@@ -785,12 +785,19 @@ impl IkeAuthExchange {
     /// InitDone → AuthSent
     pub fn create_request(
         context: &mut IkeSaContext,
+        ike_sa_init_request: &[u8],
         id_payload: IdPayload,
         psk: &[u8],
         child_proposals: Vec<Proposal>,
         ts_i: super::payload::TrafficSelectorsPayload,
         ts_r: super::payload::TrafficSelectorsPayload,
     ) -> Result<IkeMessage> {
+        use super::auth;
+        use super::constants::{ExchangeType, IkeFlags, PayloadType};
+        use super::message::{IkeHeader, IkeMessage};
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::crypto::PrfAlgorithm;
+
         // Validate state
         if context.state != IkeState::InitDone {
             return Err(Error::InvalidState(format!(
@@ -800,23 +807,107 @@ impl IkeAuthExchange {
         }
 
         // Get the selected proposal from IKE_SA_INIT
-        let _selected_proposal = context
+        let selected_proposal = context
             .selected_proposal
             .as_ref()
             .ok_or_else(|| Error::Internal("No proposal selected".into()))?;
 
-        // TODO: Get PRF algorithm from selected proposal
-        // TODO: Compute AUTH payload using PSK
-        // TODO: Build inner payloads: IDi, AUTH, SAi2, TSi, TSr
-        // TODO: Serialize inner payloads
-        // TODO: Add padding
-        // TODO: Encrypt with SK_ei
-        // TODO: Create SK payload
-        // TODO: Build IKE message with encrypted payload
-        // TODO: Transition to AuthSent state
+        // Get PRF algorithm from selected proposal
+        let prf_alg = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Prf)
+            .map(|t| {
+                // Map transform ID to PrfAlgorithm
+                match t.transform_id {
+                    2 => PrfAlgorithm::HmacSha256,
+                    3 => PrfAlgorithm::HmacSha384,
+                    4 => PrfAlgorithm::HmacSha512,
+                    _ => PrfAlgorithm::HmacSha256, // Default
+                }
+            })
+            .unwrap_or(PrfAlgorithm::HmacSha256);
 
-        // Placeholder implementation
-        Err(Error::Internal("IKE_AUTH not yet implemented".into()))
+        // Get cipher algorithm from selected proposal
+        let cipher = selected_proposal
+            .transforms
+            .iter()
+            .find(|t| t.transform_type == super::proposal::TransformType::Encr)
+            .map(|t| {
+                // Map transform ID to CipherAlgorithm
+                match t.transform_id {
+                    20 => CipherAlgorithm::AesGcm128, // ENCR_AES_GCM_16 with 128-bit key
+                    19 => CipherAlgorithm::AesGcm256, // ENCR_AES_GCM_16 with 256-bit key (non-standard)
+                    28 => CipherAlgorithm::ChaCha20Poly1305, // ENCR_CHACHA20_POLY1305
+                    _ => CipherAlgorithm::AesGcm128, // Default
+                }
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Get nonce_r
+        let nonce_r = context
+            .nonce_r
+            .as_ref()
+            .ok_or_else(|| Error::Internal("Responder nonce not set".into()))?;
+
+        // Get SK_pi for AUTH computation
+        let sk_pi = context
+            .get_psk_auth_key()
+            .ok_or_else(|| Error::Internal("SK_pi not derived".into()))?;
+
+        // Construct signed octets for AUTH computation
+        let signed_octets = auth::construct_initiator_signed_octets(
+            prf_alg,
+            ike_sa_init_request,
+            nonce_r,
+            sk_pi,
+            &id_payload.data,
+        );
+
+        // Compute AUTH payload
+        let auth_payload = auth::compute_psk_auth(prf_alg, sk_pi, &signed_octets);
+
+        // Build Child SA proposal payload
+        let sa_payload = super::payload::SaPayload {
+            proposals: child_proposals,
+        };
+
+        // Build inner payloads: IDi, AUTH, SAi2, TSi, TSr
+        let inner_payloads = vec![
+            IkePayload::IDi(id_payload),
+            IkePayload::AUTH(auth_payload),
+            IkePayload::SA(sa_payload),
+            IkePayload::TSi(ts_i),
+            IkePayload::TSr(ts_r),
+        ];
+
+        // Create IKE header for this message
+        let message_id = context.next_message_id();
+        let flags = IkeFlags::request(true); // Initiator request
+
+        let header = IkeHeader::new(
+            context.initiator_spi,
+            context.responder_spi,
+            PayloadType::SK,
+            ExchangeType::IkeAuth,
+            flags,
+            message_id,
+            0, // Length will be computed during serialization
+        );
+
+        // Serialize IKE header to use as AAD
+        let ike_header_bytes = header.to_bytes();
+
+        // Encrypt inner payloads
+        let sk_payload = Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+
+        // Build final message with SK payload
+        let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
+
+        // Transition to AuthSent state
+        context.transition_to(IkeState::AuthSent)?;
+
+        Ok(message)
     }
 
     /// Process IKE_AUTH request (responder)
@@ -1260,5 +1351,143 @@ mod tests {
 
         // Should fail due to authentication tag mismatch
         assert!(result.is_err());
+    }
+
+    // IKE_AUTH create_request tests
+
+    #[test]
+    fn test_ike_auth_create_request() {
+        use crate::ipsec::crypto::PrfAlgorithm;
+        use super::super::constants::ExchangeType;
+        use super::super::payload::{IdPayload, IdType, TrafficSelector, TrafficSelectorsPayload, TsType};
+        use super::super::proposal::{ProtocolId, Transform, TransformType};
+
+        // Setup initiator context with derived keys
+        let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
+        ctx.responder_spi = [2u8; 8];
+        ctx.nonce_i = Some(vec![0x01; 32]);
+        ctx.nonce_r = Some(vec![0x02; 32]);
+        ctx.shared_secret = Some(vec![0x03; 256]);
+        ctx.state = IkeState::InitDone;
+
+        // Set selected proposal with PRF and encryption
+        let proposal = Proposal::new(1, ProtocolId::Ike)
+            .add_transform(Transform::new(TransformType::Prf, 2)) // HMAC-SHA256
+            .add_transform(Transform::new(TransformType::Encr, 20)); // AES-GCM-128
+        ctx.selected_proposal = Some(proposal);
+
+        // Derive keys
+        ctx.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+            .expect("Key derivation failed");
+
+        // Create test parameters
+        let ike_sa_init_request = vec![0xAA; 100]; // Fake IKE_SA_INIT request
+        let id_payload = IdPayload {
+            id_type: IdType::Ipv4Addr,
+            data: vec![192, 168, 1, 1],
+        };
+        let psk = b"test_psk";
+
+        // Child SA proposal
+        let child_proposal = Proposal::new(1, ProtocolId::Esp)
+            .add_transform(Transform::new(TransformType::Encr, 20)); // AES-GCM-128
+        let child_proposals = vec![child_proposal];
+
+        // Traffic selectors
+        let ts_i = TrafficSelectorsPayload {
+            selectors: vec![TrafficSelector::ipv4_any()],
+        };
+        let ts_r = TrafficSelectorsPayload {
+            selectors: vec![TrafficSelector::ipv4_any()],
+        };
+
+        // Create request
+        let message = IkeAuthExchange::create_request(
+            &mut ctx,
+            &ike_sa_init_request,
+            id_payload,
+            psk,
+            child_proposals,
+            ts_i,
+            ts_r,
+        )
+        .expect("Failed to create IKE_AUTH request");
+
+        // Verify message structure
+        assert_eq!(message.header.exchange_type, ExchangeType::IkeAuth);
+        assert!(message.header.flags.is_initiator());
+        assert!(!message.header.flags.is_response());
+        assert_eq!(message.header.message_id, 0); // First message after IKE_SA_INIT
+        assert_eq!(message.payloads.len(), 1); // Should contain SK payload
+
+        // Verify SK payload
+        match &message.payloads[0] {
+            IkePayload::SK(sk) => {
+                assert_eq!(sk.iv.len(), 8); // AES-GCM IV
+                assert!(!sk.encrypted_data.is_empty());
+                assert!(sk.is_aead());
+            }
+            _ => panic!("Expected SK payload"),
+        }
+
+        // Verify state transition
+        assert_eq!(ctx.state, IkeState::AuthSent);
+    }
+
+    #[test]
+    fn test_ike_auth_create_request_wrong_state() {
+        use super::super::payload::{IdPayload, IdType, TrafficSelectorsPayload};
+
+        let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
+        ctx.state = IkeState::Idle; // Wrong state
+
+        let ike_sa_init_request = vec![0xAA; 100];
+        let id_payload = IdPayload {
+            id_type: IdType::Ipv4Addr,
+            data: vec![192, 168, 1, 1],
+        };
+        let ts = TrafficSelectorsPayload { selectors: vec![] };
+
+        let result = IkeAuthExchange::create_request(
+            &mut ctx,
+            &ike_sa_init_request,
+            id_payload,
+            b"test_psk",
+            vec![],
+            ts.clone(),
+            ts,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid state"));
+    }
+
+    #[test]
+    fn test_ike_auth_create_request_no_proposal() {
+        use super::super::payload::{IdPayload, IdType, TrafficSelectorsPayload};
+
+        let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
+        ctx.state = IkeState::InitDone;
+        // No selected_proposal set
+
+        let ike_sa_init_request = vec![0xAA; 100];
+        let id_payload = IdPayload {
+            id_type: IdType::Ipv4Addr,
+            data: vec![192, 168, 1, 1],
+        };
+        let ts = TrafficSelectorsPayload { selectors: vec![] };
+
+        let result = IkeAuthExchange::create_request(
+            &mut ctx,
+            &ike_sa_init_request,
+            id_payload,
+            b"test_psk",
+            vec![],
+            ts.clone(),
+            ts,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No proposal selected"));
     }
 }
