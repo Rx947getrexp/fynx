@@ -298,36 +298,63 @@ pub fn derive_keys(
 
 ---
 
-### Stage 4: Authentication (PSK & Certificates) (Week 6)
+### Stage 4: Authentication (PSK & Certificates) (Week 6) ✅ PARTIALLY COMPLETED
+
+**Status**: ✅ PSK authentication completed
+**Commits**: 4709061
 
 **Goal**: Implement IKEv2 authentication methods
 
 **Deliverables**:
-- [ ] PSK (Pre-Shared Key) authentication
-- [ ] Digital signature authentication (RSA, ECDSA)
-- [ ] Certificate validation (X.509)
-- [ ] AUTH payload generation/verification
-- [ ] Integration tests (12+)
+- [x] PSK (Pre-Shared Key) authentication
+- [x] AUTH payload generation/verification
+- [x] Constant-time comparison for security
+- [x] Initiator/Responder signed octets construction
+- [ ] Digital signature authentication (RSA, ECDSA) - deferred
+- [ ] Certificate validation (X.509) - deferred
+- [x] Unit tests (10 tests - PSK authentication)
 
 **Success Criteria**:
-- Authenticate with strongSwan using PSK
-- Authenticate with strongSwan using certificates
+- ✅ Compute AUTH payload according to RFC 7296 Section 2.15
+- ✅ Verify AUTH with constant-time comparison
+- ✅ Support all PRF algorithms (HMAC-SHA256, HMAC-SHA384, HMAC-SHA512)
+- ⏳ Authenticate with strongSwan using PSK (requires exchange implementation)
+- ⏳ Authenticate with strongSwan using certificates (deferred)
 
-**Files to Create**:
+**Actual Implementation** (4709061):
+- PSK authentication module with 10 comprehensive tests
+- `compute_psk_auth()` - AUTH payload computation
+- `verify_psk_auth()` - Constant-time verification
+- `construct_initiator_signed_octets()` - Initiator authentication data
+- `construct_responder_signed_octets()` - Responder authentication data
+
+**Files Created**:
 ```
 crates/proto/src/ipsec/ikev2/
-├── auth.rs            # Authentication logic
-├── psk.rs             # PSK authentication
-└── cert.rs            # Certificate authentication
+└── auth.rs            # PSK authentication (333 lines, 10 tests)
 ```
 
 **AUTH Payload Computation** (RFC 7296 Section 2.15):
-```
-AUTH = prf(prf(SK_p, "Key Pad for IKEv2"), <InitiatorSignedOctets>)
+```rust
+// AUTH = prf(prf(SK_p, "Key Pad for IKEv2"), <SignedOctets>)
+pub fn compute_psk_auth(
+    prf_alg: PrfAlgorithm,
+    sk_p: &[u8],
+    signed_octets: &[u8],
+) -> AuthPayload {
+    let prf1 = prf_alg.compute(sk_p, KEY_PAD_IKEV2);
+    let auth_data = prf_alg.compute(&prf1, signed_octets);
+    AuthPayload::new(AuthMethod::SharedKeyMic, auth_data)
+}
 
-InitiatorSignedOctets =
-    RealMessage1 | NonceR | prf(SK_pi, IDi')
+// InitiatorSignedOctets = RealMessage1 | NonceR | prf(SK_pi, IDi')
+// ResponderSignedOctets = RealMessage2 | NonceI | prf(SK_pr, IDr')
 ```
+
+**Security Features**:
+- Constant-time comparison prevents timing attacks
+- Proper length validation before comparison
+- Zero unsafe code
 
 ---
 
