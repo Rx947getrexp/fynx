@@ -1457,6 +1457,419 @@ impl IkeAuthExchange {
     }
 }
 
+/// CREATE_CHILD_SA exchange handler
+///
+/// Handles the CREATE_CHILD_SA exchange which creates additional Child SAs or rekeys existing SAs.
+/// This exchange is used after IKE_AUTH to create new Child SAs for different traffic selectors
+/// or to rekey existing Child SAs before they expire.
+///
+/// # RFC 7296 Section 1.3
+///
+/// ```text
+/// Initiator                         Responder
+/// -----------                       -----------
+/// HDR, SK {SA, Ni, [KEi],  -->
+///          TSi, TSr}
+///                          <--  HDR, SK {SA, Nr, [KEr],
+///                                       TSi, TSr}
+/// ```
+///
+/// # Payloads
+///
+/// **Request**:
+/// - SA: Child SA proposals (cipher, integrity, ESN, DH group)
+/// - Ni: Nonce (for key derivation)
+/// - KEi: Key Exchange (optional, for PFS - Perfect Forward Secrecy)
+/// - TSi: Traffic Selectors (initiator)
+/// - TSr: Traffic Selectors (responder)
+///
+/// **Response**:
+/// - SA: Selected Child SA proposal
+/// - Nr: Nonce (for key derivation)
+/// - KEr: Key Exchange (optional, for PFS)
+/// - TSi: Traffic Selectors (narrowed if necessary)
+/// - TSr: Traffic Selectors (narrowed if necessary)
+///
+/// # Key Derivation
+///
+/// Child SA keys are derived from the IKE SA's SK_d key:
+///
+/// ```text
+/// KEYMAT = prf+(SK_d, Ni | Nr)  [without PFS]
+/// KEYMAT = prf+(SK_d, g^ir (new) | Ni | Nr)  [with PFS]
+///
+/// SK_ei | SK_ai | SK_er | SK_ar = KEYMAT
+/// ```
+pub struct CreateChildSaExchange;
+
+impl CreateChildSaExchange {
+    /// Create CREATE_CHILD_SA request
+    ///
+    /// Builds an encrypted CREATE_CHILD_SA request message containing Child SA proposals,
+    /// nonce, optional DH key exchange (for PFS), and traffic selectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must be in Established state)
+    /// * `child_proposals` - Child SA proposals to offer
+    /// * `ts_i` - Initiator traffic selectors
+    /// * `ts_r` - Responder traffic selectors
+    /// * `use_pfs` - Whether to use Perfect Forward Secrecy (includes KEi payload)
+    /// * `dh_public_key` - DH public key (required if use_pfs is true)
+    ///
+    /// # Returns
+    ///
+    /// Returns the CREATE_CHILD_SA request message and the generated nonce.
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidState` if IKE SA is not established
+    /// - `InvalidParameter` if PFS is requested but no DH key provided
+    pub fn create_request(
+        context: &mut IkeSaContext,
+        child_proposals: &[Proposal],
+        ts_i: super::payload::TrafficSelectorsPayload,
+        ts_r: super::payload::TrafficSelectorsPayload,
+        use_pfs: bool,
+        dh_public_key: Option<Vec<u8>>,
+    ) -> Result<(IkeMessage, Vec<u8>)> {
+        use super::crypto::cipher::CipherAlgorithm;
+        use rand::Rng;
+
+        // Verify state
+        if !context.state.is_established() {
+            return Err(Error::InvalidState(
+                "IKE SA must be established before creating Child SA".into(),
+            ));
+        }
+
+        // Validate PFS parameters
+        if use_pfs && dh_public_key.is_none() {
+            return Err(Error::InvalidParameter(
+                "DH public key required when using PFS".into(),
+            ));
+        }
+
+        // Generate nonce
+        let mut nonce = vec![0u8; 32]; // 256-bit nonce
+        rand::thread_rng().fill(&mut nonce[..]);
+
+        // Build Child SA proposal payload
+        let sa_payload = SaPayload {
+            proposals: child_proposals.to_vec(),
+        };
+
+        // Build nonce payload
+        let nonce_payload = NoncePayload {
+            nonce_data: nonce.clone(),
+        };
+
+        // Build inner payloads
+        let mut inner_payloads = vec![
+            IkePayload::SA(sa_payload),
+            IkePayload::Nonce(nonce_payload),
+        ];
+
+        // Add KEi if using PFS
+        if use_pfs {
+            let dh_group = context
+                .selected_proposal
+                .as_ref()
+                .and_then(|p| {
+                    p.transforms.iter().find_map(|t| {
+                        if matches!(t.transform_type, super::proposal::TransformType::Dh) {
+                            Some(t.transform_id as u16)
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .ok_or_else(|| Error::Internal("No DH group in selected proposal".into()))?;
+
+            inner_payloads.push(IkePayload::KE(KePayload {
+                dh_group,
+                key_data: dh_public_key.unwrap(),
+            }));
+        }
+
+        // Add traffic selectors
+        inner_payloads.push(IkePayload::TSi(ts_i));
+        inner_payloads.push(IkePayload::TSr(ts_r));
+
+        // Get cipher algorithm from selected proposal
+        let cipher = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Encr) {
+                        CipherAlgorithm::from_transform_id(t.transform_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| Error::Internal("No cipher in selected proposal".into()))?;
+
+        // Build IKE header
+        let header = IkeHeader {
+            initiator_spi: context.initiator_spi,
+            responder_spi: context.responder_spi,
+            next_payload: PayloadType::SK,
+            version: 0x20, // IKEv2
+            exchange_type: ExchangeType::CreateChildSa,
+            flags: IkeFlags::new(context.is_initiator, false, false),
+            message_id: context.message_id,
+            length: 0, // Will be calculated
+        };
+
+        let ike_header_bytes = header.to_bytes();
+
+        // Encrypt inner payloads
+        let sk_payload = IkeAuthExchange::encrypt_payloads(
+            context,
+            &ike_header_bytes,
+            &inner_payloads,
+            cipher,
+        )?;
+
+        // Build message
+        let message = IkeMessage {
+            header,
+            payloads: vec![IkePayload::SK(sk_payload)],
+        };
+
+        // Increment message ID for next exchange
+        context.message_id += 1;
+
+        Ok((message, nonce))
+    }
+
+    /// Process CREATE_CHILD_SA request (Responder)
+    ///
+    /// Decrypts and processes the CREATE_CHILD_SA request, selects a Child SA proposal,
+    /// derives Child SA keys, and prepares for response creation.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context (must be established)
+    /// * `request` - CREATE_CHILD_SA request message
+    /// * `nonce_r` - Responder's nonce (generated by caller)
+    /// * `configured_proposals` - Configured Child SA proposals
+    /// * `dh_shared_secret` - Optional DH shared secret (for PFS)
+    ///
+    /// # Returns
+    ///
+    /// Returns tuple of (selected_proposal, nonce_i, ts_i, ts_r, sk_ei, sk_ai, sk_er, sk_ar)
+    /// where the keys are the derived Child SA encryption and authentication keys.
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidState` if IKE SA is not established
+    /// - `InvalidMessage` if request is malformed
+    /// - `NoProposalChosen` if no acceptable proposal found
+    pub fn process_request(
+        context: &IkeSaContext,
+        request: &IkeMessage,
+        nonce_r: &[u8],
+        configured_proposals: &[Proposal],
+        dh_shared_secret: Option<&[u8]>,
+    ) -> Result<(
+        Proposal,
+        Vec<u8>,
+        super::payload::TrafficSelectorsPayload,
+        super::payload::TrafficSelectorsPayload,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+    )> {
+        use super::crypto::cipher::CipherAlgorithm;
+        use crate::ipsec::child_sa::derive_child_sa_keys;
+        use crate::ipsec::crypto::prf::PrfAlgorithm;
+
+        // Verify state
+        if !context.state.is_established() {
+            return Err(Error::InvalidState(
+                "IKE SA must be established to process CREATE_CHILD_SA".into(),
+            ));
+        }
+
+        // Verify exchange type
+        if request.header.exchange_type != ExchangeType::CreateChildSa {
+            return Err(Error::InvalidExchangeType);
+        }
+
+        // Extract SK payload
+        let sk_payload = request
+            .payloads
+            .iter()
+            .find_map(|p| {
+                if let IkePayload::SK(sk) = p {
+                    Some(sk)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::MissingPayload("SK payload not found".into()))?;
+
+        // Get cipher algorithm
+        let cipher = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Encr) {
+                        CipherAlgorithm::from_transform_id(t.transform_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| Error::Internal("No cipher in selected proposal".into()))?;
+
+        // Decrypt inner payloads
+        let ike_header_bytes = request.header.to_bytes();
+        let inner_payloads = IkeAuthExchange::decrypt_payloads(
+            context,
+            &ike_header_bytes,
+            sk_payload,
+            cipher,
+            PayloadType::SA, // First payload is SA
+        )?;
+
+        // Extract payloads
+        let mut child_sa: Option<SaPayload> = None;
+        let mut nonce_i: Option<Vec<u8>> = None;
+        let mut ke_i: Option<KePayload> = None;
+        let mut ts_i: Option<super::payload::TrafficSelectorsPayload> = None;
+        let mut ts_r: Option<super::payload::TrafficSelectorsPayload> = None;
+
+        for payload in &inner_payloads {
+            match payload {
+                IkePayload::SA(sa) => child_sa = Some(sa.clone()),
+                IkePayload::Nonce(nonce) => nonce_i = Some(nonce.nonce_data.clone()),
+                IkePayload::KE(ke) => ke_i = Some(ke.clone()),
+                IkePayload::TSi(ts) => ts_i = Some(ts.clone()),
+                IkePayload::TSr(ts) => ts_r = Some(ts.clone()),
+                _ => {}
+            }
+        }
+
+        // Validate required payloads
+        let child_sa = child_sa.ok_or_else(|| Error::MissingPayload("SA payload".into()))?;
+        let nonce_i = nonce_i.ok_or_else(|| Error::MissingPayload("Nonce payload".into()))?;
+        let ts_i = ts_i.ok_or_else(|| Error::MissingPayload("TSi payload".into()))?;
+        let ts_r = ts_r.ok_or_else(|| Error::MissingPayload("TSr payload".into()))?;
+
+        // Validate PFS consistency
+        if dh_shared_secret.is_some() != ke_i.is_some() {
+            return Err(Error::InvalidMessage(
+                "PFS mismatch: DH key exchange presence inconsistent".into(),
+            ));
+        }
+
+        // Select proposal
+        let selected_proposal = select_proposal(&child_sa.proposals, configured_proposals)?.clone();
+
+        // Get PRF algorithm from IKE SA proposal
+        let prf_alg = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Prf) {
+                        PrfAlgorithm::from_transform_id(t.transform_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| Error::Internal("No PRF in IKE SA proposal".into()))?;
+
+        // Get SK_d key
+        let sk_d = context
+            .sk_d
+            .as_ref()
+            .ok_or_else(|| Error::Internal("SK_d not derived".into()))?;
+
+        // Determine key lengths from selected Child SA proposal
+        let (encr_key_len, integ_key_len) = Self::get_key_lengths(&selected_proposal)?;
+
+        // Derive Child SA keys
+        let (sk_ei, sk_ai, sk_er, sk_ar) = derive_child_sa_keys(
+            prf_alg,
+            sk_d,
+            &nonce_i,
+            nonce_r,
+            dh_shared_secret,
+            encr_key_len,
+            integ_key_len,
+        );
+
+        Ok((
+            selected_proposal,
+            nonce_i,
+            ts_i,
+            ts_r,
+            sk_ei,
+            sk_ai,
+            sk_er,
+            sk_ar,
+        ))
+    }
+
+    /// Get key lengths from Child SA proposal
+    ///
+    /// Determines the encryption and integrity key lengths based on the selected
+    /// Child SA proposal's cipher and integrity algorithms.
+    ///
+    /// # Arguments
+    ///
+    /// * `proposal` - Selected Child SA proposal
+    ///
+    /// # Returns
+    ///
+    /// Returns (encryption_key_len, integrity_key_len) in bytes
+    fn get_key_lengths(proposal: &Proposal) -> Result<(usize, usize)> {
+        use super::proposal::{EncrTransformId, IntegTransformId, TransformType};
+
+        // Find encryption transform
+        let encr_transform = proposal
+            .transforms
+            .iter()
+            .find(|t| matches!(t.transform_type, TransformType::Encr))
+            .ok_or_else(|| Error::InvalidProposal("No encryption transform".into()))?;
+
+        let encr_key_len = match EncrTransformId::from_u16(encr_transform.transform_id) {
+            Some(EncrTransformId::AesGcm128) => 16,  // 128-bit key
+            Some(EncrTransformId::AesGcm256) => 32,  // 256-bit key
+            Some(EncrTransformId::ChaCha20Poly1305) => 32, // 256-bit key
+            Some(EncrTransformId::AesCbc128) => 16,
+            Some(EncrTransformId::AesCbc256) => 32,
+            _ => return Err(Error::InvalidProposal("Unsupported encryption algorithm".into())),
+        };
+
+        // Find integrity transform (may not exist for AEAD)
+        let integ_key_len = if let Some(integ_transform) = proposal
+            .transforms
+            .iter()
+            .find(|t| matches!(t.transform_type, TransformType::Integ))
+        {
+            match IntegTransformId::from_u16(integ_transform.transform_id) {
+                Some(IntegTransformId::HmacSha256_128) => 32, // HMAC-SHA256 uses 32-byte key
+                Some(IntegTransformId::HmacSha512_256) => 64, // HMAC-SHA512 uses 64-byte key
+                Some(IntegTransformId::None) => 0, // AEAD doesn't need separate integrity
+                _ => return Err(Error::InvalidProposal("Unsupported integrity algorithm".into())),
+            }
+        } else {
+            0 // AEAD ciphers don't have separate integrity transform
+        };
+
+        Ok((encr_key_len, integ_key_len))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
