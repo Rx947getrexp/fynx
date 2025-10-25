@@ -239,7 +239,8 @@ impl Transform {
 
     /// Add attribute
     pub fn with_attribute(mut self, attr_type: u16, value: Vec<u8>) -> Self {
-        self.attributes.push(TransformAttribute { attr_type, value });
+        self.attributes
+            .push(TransformAttribute { attr_type, value });
         self
     }
 
@@ -456,12 +457,10 @@ mod tests {
             .add_transform(Transform::dh(DhTransformId::Group14));
 
         // Configured proposals (what we accept)
-        let configured = vec![
-            Proposal::new(1, ProtocolId::Ike)
-                .add_transform(Transform::encr(EncrTransformId::AesGcm256))
-                .add_transform(Transform::prf(PrfTransformId::HmacSha256))
-                .add_transform(Transform::dh(DhTransformId::Group14)),
-        ];
+        let configured = vec![Proposal::new(1, ProtocolId::Ike)
+            .add_transform(Transform::encr(EncrTransformId::AesGcm256))
+            .add_transform(Transform::prf(PrfTransformId::HmacSha256))
+            .add_transform(Transform::dh(DhTransformId::Group14))];
 
         assert!(offered.is_acceptable(&configured));
     }

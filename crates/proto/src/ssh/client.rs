@@ -396,9 +396,9 @@ impl SshClient {
             .as_ref()
             .ok_or_else(|| FynxError::Protocol("Server host key not available".to_string()))?;
 
-        let host_key_algorithm = self
-            .server_host_key_algorithm
-            .ok_or_else(|| FynxError::Protocol("Server host key algorithm not available".to_string()))?;
+        let host_key_algorithm = self.server_host_key_algorithm.ok_or_else(|| {
+            FynxError::Protocol("Server host key algorithm not available".to_string())
+        })?;
 
         let key_type = host_key_algorithm.name();
 
@@ -410,7 +410,9 @@ impl SshClient {
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .map_err(|_| {
-                    FynxError::Protocol("Cannot determine home directory for known_hosts".to_string())
+                    FynxError::Protocol(
+                        "Cannot determine home directory for known_hosts".to_string(),
+                    )
                 })?;
             PathBuf::from(home).join(".ssh").join("known_hosts")
         };
@@ -449,7 +451,8 @@ impl SshClient {
                     }
                 } else {
                     Err(FynxError::Protocol(
-                        "Host key verification failed: Ask mode requires user_prompt_callback".to_string()
+                        "Host key verification failed: Ask mode requires user_prompt_callback"
+                            .to_string(),
                     ))
                 }
             }
@@ -466,12 +469,24 @@ impl SshClient {
             }
 
             // Changed host key - always reject except in No mode
-            (HostKeyStatus::Changed { old_key_type, old_key_data }, StrictHostKeyChecking::No) => {
+            (
+                HostKeyStatus::Changed {
+                    old_key_type,
+                    old_key_data,
+                },
+                StrictHostKeyChecking::No,
+            ) => {
                 // No checking mode - accept even changed keys
                 let _ = (old_key_type, old_key_data); // Suppress unused warnings
                 Ok(())
             }
-            (HostKeyStatus::Changed { old_key_type, old_key_data }, _) => {
+            (
+                HostKeyStatus::Changed {
+                    old_key_type,
+                    old_key_data,
+                },
+                _,
+            ) => {
                 // All other modes reject changed keys (potential MITM attack)
                 Err(FynxError::Protocol(format!(
                     "WARNING: HOST KEY CHANGED FOR '{}:{}'\n\
@@ -497,7 +512,10 @@ impl SshClient {
         let mut hasher = Sha256::new();
         hasher.update(key_data);
         let hash = hasher.finalize();
-        format!("SHA256:{}", base64::engine::general_purpose::STANDARD.encode(hash))
+        format!(
+            "SHA256:{}",
+            base64::engine::general_purpose::STANDARD.encode(hash)
+        )
     }
 
     /// Verifies the host key signature over the exchange hash.
@@ -1093,11 +1111,9 @@ impl SshClient {
                 self.username = Some(username.to_string());
                 Ok(())
             }
-            msg_type if msg_type == MessageType::UserauthFailure as u8 => {
-                Err(FynxError::Protocol(
-                    "Public key authentication failed (signature rejected)".to_string(),
-                ))
-            }
+            msg_type if msg_type == MessageType::UserauthFailure as u8 => Err(FynxError::Protocol(
+                "Public key authentication failed (signature rejected)".to_string(),
+            )),
             _ => Err(FynxError::Protocol("Unexpected auth response".to_string())),
         }
     }
@@ -1596,10 +1612,16 @@ mod tests {
     #[test]
     fn test_config_strict_host_key_checking() {
         let mut config = SshClientConfig::default();
-        assert_eq!(config.strict_host_key_checking, StrictHostKeyChecking::Strict);
+        assert_eq!(
+            config.strict_host_key_checking,
+            StrictHostKeyChecking::Strict
+        );
 
         config.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
-        assert_eq!(config.strict_host_key_checking, StrictHostKeyChecking::AcceptNew);
+        assert_eq!(
+            config.strict_host_key_checking,
+            StrictHostKeyChecking::AcceptNew
+        );
 
         config.strict_host_key_checking = StrictHostKeyChecking::No;
         assert_eq!(config.strict_host_key_checking, StrictHostKeyChecking::No);
@@ -1617,8 +1639,14 @@ mod tests {
 
         let cloned = config.clone();
         assert_eq!(cloned.user_agent, "TestClient");
-        assert_eq!(cloned.strict_host_key_checking, StrictHostKeyChecking::AcceptNew);
-        assert_eq!(cloned.known_hosts_file, Some(PathBuf::from("/test/known_hosts")));
+        assert_eq!(
+            cloned.strict_host_key_checking,
+            StrictHostKeyChecking::AcceptNew
+        );
+        assert_eq!(
+            cloned.known_hosts_file,
+            Some(PathBuf::from("/test/known_hosts"))
+        );
         // Callback is intentionally NOT cloned
         assert!(cloned.user_prompt_callback.is_none());
     }
@@ -1657,7 +1685,10 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(key_data);
         let hash = hasher.finalize();
-        let expected = format!("SHA256:{}", base64::engine::general_purpose::STANDARD.encode(hash));
+        let expected = format!(
+            "SHA256:{}",
+            base64::engine::general_purpose::STANDARD.encode(hash)
+        );
 
         // Note: We can't directly test SshClient::format_fingerprint as it's private,
         // but we verify the logic is correct by checking the format matches expectations

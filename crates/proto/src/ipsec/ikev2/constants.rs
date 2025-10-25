@@ -98,6 +98,10 @@ impl IkeFlags {
 pub enum PayloadType {
     /// No next payload (0)
     None = 0,
+    /// NAT Detection Source IP (20) - RFC 3947
+    NatDetectionSourceIp = 20,
+    /// NAT Detection Destination IP (21) - RFC 3947
+    NatDetectionDestinationIp = 21,
     /// Security Association (33)
     SA = 33,
     /// Key Exchange (34)
@@ -137,6 +141,8 @@ impl PayloadType {
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(PayloadType::None),
+            20 => Some(PayloadType::NatDetectionSourceIp),
+            21 => Some(PayloadType::NatDetectionDestinationIp),
             33 => Some(PayloadType::SA),
             34 => Some(PayloadType::KE),
             35 => Some(PayloadType::IDi),

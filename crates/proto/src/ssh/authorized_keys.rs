@@ -281,9 +281,9 @@ impl AuthorizedKeysFile {
     ///
     /// The first matching key, or None if not found.
     pub fn find_key(&self, algorithm: &str, key_data: &[u8]) -> Option<&AuthorizedKey> {
-        self.keys.iter().find(|key| {
-            key.algorithm() == algorithm && key.key_data() == key_data
-        })
+        self.keys
+            .iter()
+            .find(|key| key.algorithm() == algorithm && key.key_data() == key_data)
     }
 }
 

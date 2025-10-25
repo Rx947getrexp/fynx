@@ -92,6 +92,12 @@ pub struct ReplayWindow {
     window_size: u32,
 }
 
+impl Default for ReplayWindow {
+    fn default() -> Self {
+        Self::new(DEFAULT_WINDOW_SIZE)
+    }
+}
+
 impl ReplayWindow {
     /// Create new anti-replay window
     ///
@@ -104,7 +110,7 @@ impl ReplayWindow {
     /// Panics if window_size is outside valid range
     pub fn new(window_size: u32) -> Self {
         assert!(
-            window_size >= MIN_WINDOW_SIZE && window_size <= MAX_WINDOW_SIZE,
+            (MIN_WINDOW_SIZE..=MAX_WINDOW_SIZE).contains(&window_size),
             "Window size must be between {} and {}",
             MIN_WINDOW_SIZE,
             MAX_WINDOW_SIZE
@@ -115,11 +121,6 @@ impl ReplayWindow {
             bitmap: 0,
             window_size,
         }
-    }
-
-    /// Create window with default size (64)
-    pub fn default() -> Self {
-        Self::new(DEFAULT_WINDOW_SIZE)
     }
 
     /// Check sequence number and update window if valid
@@ -422,7 +423,7 @@ mod tests {
 
         // 32-packet window: valid range is [69, 100]
         assert!(!window.check_and_update(68)); // Outside
-        assert!(window.check_and_update(69));  // Edge
-        assert!(window.check_and_update(80));  // Inside
+        assert!(window.check_and_update(69)); // Edge
+        assert!(window.check_and_update(80)); // Inside
     }
 }

@@ -215,12 +215,7 @@ impl KnownHost {
     }
 
     /// Recursive wildcard matching implementation.
-    fn wildcard_match_impl(
-        pattern: &[char],
-        text: &[char],
-        p_idx: usize,
-        t_idx: usize,
-    ) -> bool {
+    fn wildcard_match_impl(pattern: &[char], text: &[char], p_idx: usize, t_idx: usize) -> bool {
         // Both exhausted - match
         if p_idx == pattern.len() && t_idx == text.len() {
             return true;
@@ -671,13 +666,25 @@ mod tests {
 
     #[test]
     fn test_wildcard_match() {
-        assert!(KnownHost::wildcard_match("*.example.com", "host.example.com"));
-        assert!(KnownHost::wildcard_match("*.example.com", "sub.host.example.com"));
+        assert!(KnownHost::wildcard_match(
+            "*.example.com",
+            "host.example.com"
+        ));
+        assert!(KnownHost::wildcard_match(
+            "*.example.com",
+            "sub.host.example.com"
+        ));
         assert!(!KnownHost::wildcard_match("*.example.com", "example.com"));
         assert!(!KnownHost::wildcard_match("*.example.com", "other.com"));
 
-        assert!(KnownHost::wildcard_match("host?.example.com", "host1.example.com"));
-        assert!(!KnownHost::wildcard_match("host?.example.com", "host12.example.com"));
+        assert!(KnownHost::wildcard_match(
+            "host?.example.com",
+            "host1.example.com"
+        ));
+        assert!(!KnownHost::wildcard_match(
+            "host?.example.com",
+            "host12.example.com"
+        ));
     }
 
     #[test]
@@ -848,8 +855,7 @@ example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRanDK33/M2A9M0Lc/TQ/pF5kfd8rpl
             .unwrap();
 
         // Add entry with comment (by parsing a line)
-        let line_with_comment =
-            "other.com ssh-ed25519 AQIDBA== user@host";
+        let line_with_comment = "other.com ssh-ed25519 AQIDBA== user@host";
         if let Ok(entry) = KnownHost::parse_line(line_with_comment) {
             file.add_entry(entry);
         }

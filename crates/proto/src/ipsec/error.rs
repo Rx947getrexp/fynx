@@ -144,11 +144,7 @@ impl fmt::Display for Error {
                 write!(f, "Replay attack detected (sequence: {})", seq)
             }
             Error::InvalidLength { expected, actual } => {
-                write!(
-                    f,
-                    "Invalid length: expected {}, got {}",
-                    expected, actual
-                )
+                write!(f, "Invalid length: expected {}, got {}", expected, actual)
             }
             Error::BufferTooShort {
                 required,

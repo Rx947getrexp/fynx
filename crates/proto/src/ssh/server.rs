@@ -745,14 +745,9 @@ impl SshSession {
         let signature_blob = signature.unwrap();
 
         // Get session_id (must have completed key exchange)
-        let session_id = self
-            .session_id
-            .as_ref()
-            .ok_or_else(|| {
-                FynxError::Protocol(
-                    "No session ID available (key exchange not completed)".to_string(),
-                )
-            })?;
+        let session_id = self.session_id.as_ref().ok_or_else(|| {
+            FynxError::Protocol("No session ID available (key exchange not completed)".to_string())
+        })?;
 
         // Construct signature data (RFC 4252 Section 7)
         let signature_data = construct_signature_data(
@@ -764,12 +759,8 @@ impl SshSession {
         );
 
         // Verify signature based on algorithm
-        let verified = self.verify_signature(
-            algorithm,
-            public_key,
-            signature_blob,
-            &signature_data,
-        )?;
+        let verified =
+            self.verify_signature(algorithm, public_key, signature_blob, &signature_data)?;
 
         if verified {
             Ok(PublicKeyAuthResult::Success)
@@ -938,8 +929,7 @@ impl SshSession {
                     // Handle authentication based on method
                     match auth_request.method() {
                         AuthMethod::Password(password) => {
-                            let success =
-                                (self.auth_callback)(auth_request.user_name(), password);
+                            let success = (self.auth_callback)(auth_request.user_name(), password);
 
                             if success {
                                 // Send USERAUTH_SUCCESS
@@ -986,7 +976,8 @@ impl SshSession {
                             match auth_result {
                                 PublicKeyAuthResult::PkOk => {
                                     // Try phase: send SSH_MSG_USERAUTH_PK_OK
-                                    let pk_ok = AuthPkOk::new(algorithm.clone(), public_key.clone());
+                                    let pk_ok =
+                                        AuthPkOk::new(algorithm.clone(), public_key.clone());
                                     self.send_packet(&pk_ok.to_bytes()).await?;
                                     // Don't increment attempts for try phase
                                     attempts -= 1;
@@ -1313,10 +1304,7 @@ mod tests {
         #[cfg(not(unix))]
         {
             let path = SshSession::get_authorized_keys_path("alice");
-            assert_eq!(
-                path,
-                PathBuf::from("C:\\Users\\alice/.ssh/authorized_keys")
-            );
+            assert_eq!(path, PathBuf::from("C:\\Users\\alice/.ssh/authorized_keys"));
         }
     }
 

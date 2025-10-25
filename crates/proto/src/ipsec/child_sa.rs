@@ -395,10 +395,7 @@ impl ChildSa {
     /// Can be called from Rekeyed or Expired state.
     /// This is the terminal state.
     pub fn mark_deleted(&mut self) -> Result<()> {
-        if !matches!(
-            self.state,
-            ChildSaState::Rekeyed | ChildSaState::Expired
-        ) {
+        if !matches!(self.state, ChildSaState::Rekeyed | ChildSaState::Expired) {
             return Err(Error::InvalidState(format!(
                 "Cannot delete SA from state {:?}",
                 self.state
@@ -588,11 +585,8 @@ mod tests {
 
     #[test]
     fn test_sa_lifetime_custom() {
-        let lifetime = SaLifetime::new(
-            Duration::from_secs(30 * 60),
-            Duration::from_secs(40 * 60),
-        )
-        .unwrap();
+        let lifetime =
+            SaLifetime::new(Duration::from_secs(30 * 60), Duration::from_secs(40 * 60)).unwrap();
 
         assert_eq!(lifetime.soft_time, Duration::from_secs(30 * 60));
         assert_eq!(lifetime.hard_time, Duration::from_secs(40 * 60));
@@ -601,16 +595,10 @@ mod tests {
     #[test]
     fn test_sa_lifetime_invalid() {
         // Soft >= Hard should fail
-        let result = SaLifetime::new(
-            Duration::from_secs(60 * 60),
-            Duration::from_secs(60 * 60),
-        );
+        let result = SaLifetime::new(Duration::from_secs(60 * 60), Duration::from_secs(60 * 60));
         assert!(result.is_err());
 
-        let result = SaLifetime::new(
-            Duration::from_secs(70 * 60),
-            Duration::from_secs(60 * 60),
-        );
+        let result = SaLifetime::new(Duration::from_secs(70 * 60), Duration::from_secs(60 * 60));
         assert!(result.is_err());
     }
 
@@ -803,16 +791,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // New Child SA should be in Active state
         assert_eq!(child_sa.state, ChildSaState::Active);
@@ -828,16 +807,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Active SA can be used
         assert!(child_sa.can_use());
@@ -852,16 +822,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Initiate rekey
         child_sa.initiate_rekey().unwrap();
@@ -879,16 +840,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Transition to Rekeyed state
         child_sa.initiate_rekey().unwrap();
@@ -907,16 +859,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Mark as expired
         child_sa.mark_expired().unwrap();
@@ -934,16 +877,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Should successfully initiate rekey
         assert!(child_sa.initiate_rekey().is_ok());
@@ -960,16 +894,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Transition to Rekeying state
         child_sa.initiate_rekey().unwrap();
@@ -988,16 +913,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Initiate rekey first
         child_sa.initiate_rekey().unwrap();
@@ -1016,16 +932,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Cannot mark as rekeyed from Active state
         let result = child_sa.mark_rekeyed();
@@ -1041,16 +948,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Can mark as expired from Active state
         assert!(child_sa.mark_expired().is_ok());
@@ -1066,16 +964,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Transition to Rekeyed state
         child_sa.initiate_rekey().unwrap();
@@ -1095,16 +984,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Transition to Expired state
         child_sa.mark_expired().unwrap();
@@ -1123,16 +1003,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Cannot mark as deleted from Active state
         let result = child_sa.mark_deleted();
@@ -1148,16 +1019,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Mark as expired
         child_sa.mark_expired().unwrap();
@@ -1175,16 +1037,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Transition to Rekeyed state
         child_sa.initiate_rekey().unwrap();
@@ -1203,16 +1056,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Active SA should not be deleted
         assert!(!child_sa.should_delete());
@@ -1227,21 +1071,9 @@ mod tests {
         let proposal = create_test_proposal();
 
         // Short lifetime for testing
-        let lifetime = SaLifetime::new(
-            Duration::from_secs(10),
-            Duration::from_secs(20),
-        ).unwrap();
+        let lifetime = SaLifetime::new(Duration::from_secs(10), Duration::from_secs(20)).unwrap();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Should have time until rekey
         let time_until = child_sa.time_until_rekey();
@@ -1258,16 +1090,7 @@ mod tests {
         let proposal = create_test_proposal();
         let lifetime = SaLifetime::default();
 
-        let mut child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let mut child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Initiate rekey
         child_sa.initiate_rekey().unwrap();
@@ -1288,21 +1111,9 @@ mod tests {
         let proposal = create_test_proposal();
 
         // Short lifetime for testing
-        let lifetime = SaLifetime::new(
-            Duration::from_secs(10),
-            Duration::from_secs(20),
-        ).unwrap();
+        let lifetime = SaLifetime::new(Duration::from_secs(10), Duration::from_secs(20)).unwrap();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Should have time until expiry
         let time_until = child_sa.time_until_expiry();
@@ -1319,21 +1130,9 @@ mod tests {
         let proposal = create_test_proposal();
 
         // Very short hard lifetime (1ms)
-        let lifetime = SaLifetime::new(
-            Duration::from_millis(1),
-            Duration::from_millis(2),
-        ).unwrap();
+        let lifetime = SaLifetime::new(Duration::from_millis(1), Duration::from_millis(2)).unwrap();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Wait for hard lifetime to expire
         std::thread::sleep(Duration::from_millis(5));
@@ -1351,21 +1150,9 @@ mod tests {
         let proposal = create_test_proposal();
 
         // Very short lifetime (1ms soft, 2ms hard)
-        let lifetime = SaLifetime::new(
-            Duration::from_millis(1),
-            Duration::from_millis(2),
-        ).unwrap();
+        let lifetime = SaLifetime::new(Duration::from_millis(1), Duration::from_millis(2)).unwrap();
 
-        let child_sa = ChildSa::new(
-            spi,
-            false,
-            sk_e,
-            None,
-            ts_i,
-            ts_r,
-            proposal,
-            lifetime,
-        );
+        let child_sa = ChildSa::new(spi, false, sk_e, None, ts_i, ts_r, proposal, lifetime);
 
         // Wait for soft lifetime to expire
         std::thread::sleep(Duration::from_millis(5));

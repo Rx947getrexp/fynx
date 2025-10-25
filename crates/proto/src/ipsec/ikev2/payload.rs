@@ -147,6 +147,12 @@ pub enum IkePayload {
     /// Encrypted payload (SK)
     SK(EncryptedPayload),
 
+    /// NAT Detection Source IP payload
+    NatDetectionSourceIp(NatDetectionSourceIpPayload),
+
+    /// NAT Detection Destination IP payload
+    NatDetectionDestinationIp(NatDetectionDestinationIpPayload),
+
     /// Unknown/unimplemented payload (store raw data)
     Unknown {
         /// Payload type
@@ -172,6 +178,8 @@ impl IkePayload {
             IkePayload::TSi(_) => PayloadType::TSi,
             IkePayload::TSr(_) => PayloadType::TSr,
             IkePayload::SK(_) => PayloadType::SK,
+            IkePayload::NatDetectionSourceIp(_) => PayloadType::NatDetectionSourceIp,
+            IkePayload::NatDetectionDestinationIp(_) => PayloadType::NatDetectionDestinationIp,
             IkePayload::Unknown { payload_type, .. } => *payload_type,
         }
     }
@@ -646,9 +654,8 @@ impl AuthPayload {
         }
 
         // Parse auth method
-        let auth_method = AuthMethod::from_u8(data[0]).ok_or_else(|| {
-            Error::InvalidPayload(format!("Unknown auth method: {}", data[0]))
-        })?;
+        let auth_method = AuthMethod::from_u8(data[0])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown auth method: {}", data[0])))?;
 
         // Skip reserved bytes (1-3)
         // Auth data starts at byte 4
@@ -1496,7 +1503,11 @@ impl TrafficSelectorsPayload {
 
     /// Get total payload length (header + data)
     pub fn total_length(&self) -> u16 {
-        let data_len: usize = 4 + self.selectors.iter().map(|ts| ts.length() as usize).sum::<usize>();
+        let data_len: usize = 4 + self
+            .selectors
+            .iter()
+            .map(|ts| ts.length() as usize)
+            .sum::<usize>();
         (PayloadHeader::SIZE + data_len) as u16
     }
 
@@ -1659,6 +1670,114 @@ impl EncryptedPayload {
     }
 }
 
+/// NAT Detection Source IP Payload
+///
+/// Contains SHA-1 hash of (SPIi | SPIr | source IP | source port).
+/// Used to detect if the source IP/port has been modified by NAT.
+///
+/// # Format (RFC 3947 Section 4)
+///
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// | Next Payload  |C|  RESERVED   |         Payload Length        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                                                               |
+/// ~                 HASH (20 bytes for SHA-1)                    ~
+/// |                                                               |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NatDetectionSourceIpPayload {
+    /// SHA-1 hash (20 bytes)
+    pub hash: [u8; 20],
+}
+
+impl NatDetectionSourceIpPayload {
+    /// Hash size (SHA-1 produces 20 bytes)
+    pub const HASH_SIZE: usize = 20;
+
+    /// Create new NAT detection source IP payload
+    pub fn new(hash: [u8; 20]) -> Self {
+        NatDetectionSourceIpPayload { hash }
+    }
+
+    /// Create from hash bytes
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::HASH_SIZE {
+            return Err(Error::InvalidPayload(format!(
+                "Invalid NAT detection hash size: {} (expected {})",
+                data.len(),
+                Self::HASH_SIZE
+            )));
+        }
+
+        let mut hash = [0u8; 20];
+        hash.copy_from_slice(data);
+        Ok(NatDetectionSourceIpPayload { hash })
+    }
+
+    /// Serialize to bytes (without payload header)
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.hash.to_vec()
+    }
+
+    /// Get payload length (including header)
+    pub fn payload_length(&self) -> u16 {
+        (PayloadHeader::SIZE + Self::HASH_SIZE) as u16
+    }
+}
+
+/// NAT Detection Destination IP Payload
+///
+/// Contains SHA-1 hash of (SPIi | SPIr | destination IP | destination port).
+/// Used to detect if the destination IP/port has been modified by NAT.
+///
+/// # Format (RFC 3947 Section 4)
+///
+/// Same format as NAT_DETECTION_SOURCE_IP payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NatDetectionDestinationIpPayload {
+    /// SHA-1 hash (20 bytes)
+    pub hash: [u8; 20],
+}
+
+impl NatDetectionDestinationIpPayload {
+    /// Hash size (SHA-1 produces 20 bytes)
+    pub const HASH_SIZE: usize = 20;
+
+    /// Create new NAT detection destination IP payload
+    pub fn new(hash: [u8; 20]) -> Self {
+        NatDetectionDestinationIpPayload { hash }
+    }
+
+    /// Create from hash bytes
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        if data.len() != Self::HASH_SIZE {
+            return Err(Error::InvalidPayload(format!(
+                "Invalid NAT detection hash size: {} (expected {})",
+                data.len(),
+                Self::HASH_SIZE
+            )));
+        }
+
+        let mut hash = [0u8; 20];
+        hash.copy_from_slice(data);
+        Ok(NatDetectionDestinationIpPayload { hash })
+    }
+
+    /// Serialize to bytes (without payload header)
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.hash.to_vec()
+    }
+
+    /// Get payload length (including header)
+    pub fn payload_length(&self) -> u16 {
+        (PayloadHeader::SIZE + Self::HASH_SIZE) as u16
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1666,9 +1785,9 @@ mod tests {
     #[test]
     fn test_payload_header_parse() {
         let data = [
-            33,  // Next payload (SA)
+            33,   // Next payload (SA)
             0x80, // Critical bit set, reserved = 0
-            0,   50, // Length = 50
+            0, 50, // Length = 50
         ];
 
         let header = PayloadHeader::from_bytes(&data).unwrap();
@@ -1773,7 +1892,7 @@ mod tests {
 
     #[test]
     fn test_sa_payload_with_proposals() {
-        use super::super::proposal::{Proposal, ProtocolId, Transform, EncrTransformId};
+        use super::super::proposal::{EncrTransformId, Proposal, ProtocolId, Transform};
 
         let proposal = Proposal::new(1, ProtocolId::Ike)
             .add_transform(Transform::encr(EncrTransformId::AesGcm256));
@@ -1935,10 +2054,7 @@ mod tests {
 
     #[test]
     fn test_notify_protocol_id_conversion() {
-        assert_eq!(
-            NotifyProtocolId::from_u8(0),
-            Some(NotifyProtocolId::None)
-        );
+        assert_eq!(NotifyProtocolId::from_u8(0), Some(NotifyProtocolId::None));
         assert_eq!(NotifyProtocolId::from_u8(1), Some(NotifyProtocolId::Ike));
         assert_eq!(NotifyProtocolId::from_u8(3), Some(NotifyProtocolId::Esp));
         assert_eq!(NotifyProtocolId::from_u8(99), None);
@@ -2438,13 +2554,14 @@ mod tests {
 
     #[test]
     fn test_encrypted_payload_roundtrip_non_aead() {
-        let original = EncryptedPayload::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], // 16-byte IV for AES-CBC
+        let original = EncryptedPayload::new(
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], // 16-byte IV for AES-CBC
             vec![0xAA; 32],
-            vec![0xBB; 16]);
+            vec![0xBB; 16],
+        );
 
         let serialized = original.to_payload_data();
-        let parsed =
-            EncryptedPayload::from_payload_data(&serialized, 16, 16).unwrap();
+        let parsed = EncryptedPayload::from_payload_data(&serialized, 16, 16).unwrap();
 
         assert_eq!(parsed.iv, original.iv);
         assert_eq!(parsed.encrypted_data, original.encrypted_data);
@@ -2513,5 +2630,75 @@ mod tests {
 
         assert_eq!(sk.encrypted_len(), 1);
         assert_eq!(sk.total_length(), 13); // Header(4) + IV(8) + data(1) = 13
+    }
+
+    #[test]
+    fn test_nat_detection_source_ip_new() {
+        let hash = [0x01; 20];
+        let payload = NatDetectionSourceIpPayload::new(hash);
+
+        assert_eq!(payload.hash, hash);
+        assert_eq!(payload.payload_length(), 24); // Header(4) + Hash(20) = 24
+    }
+
+    #[test]
+    fn test_nat_detection_source_ip_from_bytes() {
+        let data = [0xAA; 20];
+        let payload = NatDetectionSourceIpPayload::from_bytes(&data).unwrap();
+
+        assert_eq!(payload.hash, data);
+    }
+
+    #[test]
+    fn test_nat_detection_source_ip_from_bytes_invalid() {
+        let data = [0xAA; 19]; // Wrong size
+        let result = NatDetectionSourceIpPayload::from_bytes(&data);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_nat_detection_source_ip_to_bytes() {
+        let hash = [0xBB; 20];
+        let payload = NatDetectionSourceIpPayload::new(hash);
+
+        let bytes = payload.to_bytes();
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(bytes, hash.to_vec());
+    }
+
+    #[test]
+    fn test_nat_detection_destination_ip_new() {
+        let hash = [0x02; 20];
+        let payload = NatDetectionDestinationIpPayload::new(hash);
+
+        assert_eq!(payload.hash, hash);
+        assert_eq!(payload.payload_length(), 24); // Header(4) + Hash(20) = 24
+    }
+
+    #[test]
+    fn test_nat_detection_destination_ip_from_bytes() {
+        let data = [0xCC; 20];
+        let payload = NatDetectionDestinationIpPayload::from_bytes(&data).unwrap();
+
+        assert_eq!(payload.hash, data);
+    }
+
+    #[test]
+    fn test_nat_detection_destination_ip_from_bytes_invalid() {
+        let data = [0xCC; 21]; // Wrong size
+        let result = NatDetectionDestinationIpPayload::from_bytes(&data);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_nat_detection_destination_ip_to_bytes() {
+        let hash = [0xDD; 20];
+        let payload = NatDetectionDestinationIpPayload::new(hash);
+
+        let bytes = payload.to_bytes();
+        assert_eq!(bytes.len(), 20);
+        assert_eq!(bytes, hash.to_vec());
     }
 }

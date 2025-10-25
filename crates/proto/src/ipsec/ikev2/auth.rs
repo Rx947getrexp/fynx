@@ -27,11 +27,7 @@ const KEY_PAD_IKEV2: &[u8] = b"Key Pad for IKEv2";
 /// # Returns
 ///
 /// Returns AUTH payload with PSK method
-pub fn compute_psk_auth(
-    prf_alg: PrfAlgorithm,
-    sk_p: &[u8],
-    signed_octets: &[u8],
-) -> AuthPayload {
+pub fn compute_psk_auth(prf_alg: PrfAlgorithm, sk_p: &[u8], signed_octets: &[u8]) -> AuthPayload {
     // Step 1: prf(SK_p, "Key Pad for IKEv2")
     let prf1 = prf_alg.compute(sk_p, KEY_PAD_IKEV2);
 
@@ -79,7 +75,11 @@ pub fn verify_psk_auth(
 
     // Use constant-time comparison to prevent timing attacks
     let mut diff = 0u8;
-    for (a, b) in expected.auth_data.iter().zip(received_auth.auth_data.iter()) {
+    for (a, b) in expected
+        .auth_data
+        .iter()
+        .zip(received_auth.auth_data.iter())
+    {
         diff |= a ^ b;
     }
 
@@ -312,21 +312,11 @@ mod tests {
         let sk_p = vec![0xCC; 32];
         let id_data = vec![0xDD; 15];
 
-        let signed1 = construct_initiator_signed_octets(
-            prf_alg,
-            &real_message,
-            &nonce,
-            &sk_p,
-            &id_data,
-        );
+        let signed1 =
+            construct_initiator_signed_octets(prf_alg, &real_message, &nonce, &sk_p, &id_data);
 
-        let signed2 = construct_initiator_signed_octets(
-            prf_alg,
-            &real_message,
-            &nonce,
-            &sk_p,
-            &id_data,
-        );
+        let signed2 =
+            construct_initiator_signed_octets(prf_alg, &real_message, &nonce, &sk_p, &id_data);
 
         assert_eq!(signed1, signed2);
     }

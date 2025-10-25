@@ -65,8 +65,8 @@ pub mod version;
 
 // Re-export main types
 pub use auth::{
-    constant_time_compare, AuthBanner, AuthFailure, AuthMethod, AuthPkOk, AuthRequest,
-    AuthSuccess, construct_signature_data,
+    constant_time_compare, construct_signature_data, AuthBanner, AuthFailure, AuthMethod, AuthPkOk,
+    AuthRequest, AuthSuccess,
 };
 pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
 pub use client::{SshClient, SshClientConfig};

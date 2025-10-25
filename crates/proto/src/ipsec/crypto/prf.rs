@@ -40,20 +40,20 @@ impl PrfAlgorithm {
     pub fn compute(self, key: &[u8], data: &[u8]) -> Vec<u8> {
         match self {
             PrfAlgorithm::HmacSha256 => {
-                let mut mac = Hmac::<Sha256>::new_from_slice(key)
-                    .expect("HMAC can take key of any size");
+                let mut mac =
+                    Hmac::<Sha256>::new_from_slice(key).expect("HMAC can take key of any size");
                 mac.update(data);
                 mac.finalize().into_bytes().to_vec()
             }
             PrfAlgorithm::HmacSha384 => {
-                let mut mac = Hmac::<Sha384>::new_from_slice(key)
-                    .expect("HMAC can take key of any size");
+                let mut mac =
+                    Hmac::<Sha384>::new_from_slice(key).expect("HMAC can take key of any size");
                 mac.update(data);
                 mac.finalize().into_bytes().to_vec()
             }
             PrfAlgorithm::HmacSha512 => {
-                let mut mac = Hmac::<Sha512>::new_from_slice(key)
-                    .expect("HMAC can take key of any size");
+                let mut mac =
+                    Hmac::<Sha512>::new_from_slice(key).expect("HMAC can take key of any size");
                 mac.update(data);
                 mac.finalize().into_bytes().to_vec()
             }
@@ -325,18 +325,17 @@ mod tests {
         let encr_key_len = 32; // AES-256
         let integ_key_len = 32; // HMAC-SHA256
 
-        let keymat =
-            KeyMaterial::derive(
-                prf_alg,
-                &nonce_i,
-                &nonce_r,
-                &shared_secret,
-                &spi_i,
-                &spi_r,
-                encr_key_len,
-                integ_key_len,
-            )
-            .unwrap();
+        let keymat = KeyMaterial::derive(
+            prf_alg,
+            &nonce_i,
+            &nonce_r,
+            &shared_secret,
+            &spi_i,
+            &spi_r,
+            encr_key_len,
+            integ_key_len,
+        )
+        .unwrap();
 
         // Check key lengths
         assert_eq!(keymat.sk_d.len(), 32); // PRF output length
@@ -363,31 +362,29 @@ mod tests {
         let spi_i = [0x04; 8];
         let spi_r = [0x05; 8];
 
-        let keymat1 =
-            KeyMaterial::derive(
-                prf_alg,
-                &nonce_i,
-                &nonce_r,
-                &shared_secret,
-                &spi_i,
-                &spi_r,
-                32,
-                32,
-            )
-            .unwrap();
+        let keymat1 = KeyMaterial::derive(
+            prf_alg,
+            &nonce_i,
+            &nonce_r,
+            &shared_secret,
+            &spi_i,
+            &spi_r,
+            32,
+            32,
+        )
+        .unwrap();
 
-        let keymat2 =
-            KeyMaterial::derive(
-                prf_alg,
-                &nonce_i,
-                &nonce_r,
-                &shared_secret,
-                &spi_i,
-                &spi_r,
-                32,
-                32,
-            )
-            .unwrap();
+        let keymat2 = KeyMaterial::derive(
+            prf_alg,
+            &nonce_i,
+            &nonce_r,
+            &shared_secret,
+            &spi_i,
+            &spi_r,
+            32,
+            32,
+        )
+        .unwrap();
 
         // Same inputs should produce same keys
         assert_eq!(keymat1.sk_d, keymat2.sk_d);
@@ -405,31 +402,29 @@ mod tests {
         let spi_i = [0x05; 8];
         let spi_r = [0x06; 8];
 
-        let keymat1 =
-            KeyMaterial::derive(
-                prf_alg,
-                &nonce_i1,
-                &nonce_r,
-                &shared_secret,
-                &spi_i,
-                &spi_r,
-                32,
-                32,
-            )
-            .unwrap();
+        let keymat1 = KeyMaterial::derive(
+            prf_alg,
+            &nonce_i1,
+            &nonce_r,
+            &shared_secret,
+            &spi_i,
+            &spi_r,
+            32,
+            32,
+        )
+        .unwrap();
 
-        let keymat2 =
-            KeyMaterial::derive(
-                prf_alg,
-                &nonce_i2,
-                &nonce_r,
-                &shared_secret,
-                &spi_i,
-                &spi_r,
-                32,
-                32,
-            )
-            .unwrap();
+        let keymat2 = KeyMaterial::derive(
+            prf_alg,
+            &nonce_i2,
+            &nonce_r,
+            &shared_secret,
+            &spi_i,
+            &spi_r,
+            32,
+            32,
+        )
+        .unwrap();
 
         // Different nonces should produce different keys
         assert_ne!(keymat1.sk_d, keymat2.sk_d);

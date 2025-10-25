@@ -334,6 +334,8 @@ impl IkeSaInitExchange {
     /// * `proposals` - List of proposals to offer
     /// * `dh_public` - Diffie-Hellman public key
     /// * `nonce` - Random nonce value
+    /// * `local_addr` - Optional local IP address and port for NAT detection
+    /// * `remote_addr` - Optional remote IP address and port for NAT detection
     ///
     /// # Returns
     ///
@@ -343,6 +345,8 @@ impl IkeSaInitExchange {
         proposals: Vec<Proposal>,
         dh_public: Vec<u8>,
         nonce: Vec<u8>,
+        local_addr: Option<(std::net::IpAddr, u16)>,
+        remote_addr: Option<(std::net::IpAddr, u16)>,
     ) -> Result<IkeMessage> {
         // Validate state
         if context.state != IkeState::Idle {
@@ -376,14 +380,36 @@ impl IkeSaInitExchange {
         let ke_payload = KePayload::new(KePayload::DH_GROUP_14, dh_public);
         let nonce_payload = NoncePayload::new(nonce)?;
 
-        let message = IkeMessage {
-            header,
-            payloads: vec![
-                IkePayload::SA(sa_payload),
-                IkePayload::KE(ke_payload),
-                IkePayload::Nonce(nonce_payload),
-            ],
-        };
+        let mut payloads = vec![
+            IkePayload::SA(sa_payload),
+            IkePayload::KE(ke_payload),
+            IkePayload::Nonce(nonce_payload),
+        ];
+
+        // Add NAT_DETECTION payloads if addresses are provided
+        if let (Some((local_ip, local_port)), Some((remote_ip, remote_port))) =
+            (local_addr, remote_addr)
+        {
+            use super::payload::{NatDetectionDestinationIpPayload, NatDetectionSourceIpPayload};
+            use crate::ipsec::nat::NatDetectionHash;
+
+            let spi_i = u64::from_be_bytes(context.initiator_spi);
+            let spi_r = u64::from_be_bytes(context.responder_spi); // Will be 0 in request
+
+            // NAT_DETECTION_SOURCE_IP: hash of our (local) IP and port
+            let hash_local = NatDetectionHash::compute(spi_i, spi_r, local_ip, local_port);
+            payloads.push(IkePayload::NatDetectionSourceIp(
+                NatDetectionSourceIpPayload::new(hash_local.hash),
+            ));
+
+            // NAT_DETECTION_DESTINATION_IP: hash of peer (remote) IP and port
+            let hash_remote = NatDetectionHash::compute(spi_i, spi_r, remote_ip, remote_port);
+            payloads.push(IkePayload::NatDetectionDestinationIp(
+                NatDetectionDestinationIpPayload::new(hash_remote.hash),
+            ));
+        }
+
+        let message = IkeMessage { header, payloads };
 
         // Transition state
         context.transition_to(IkeState::InitSent)?;
@@ -462,6 +488,8 @@ impl IkeSaInitExchange {
     /// * `selected_proposal` - Selected proposal
     /// * `dh_public` - Our Diffie-Hellman public key
     /// * `nonce` - Our nonce value
+    /// * `local_addr` - Optional local IP address and port for NAT detection
+    /// * `remote_addr` - Optional remote IP address and port for NAT detection
     ///
     /// # Returns
     ///
@@ -472,6 +500,8 @@ impl IkeSaInitExchange {
         selected_proposal: Proposal,
         dh_public: Vec<u8>,
         nonce: Vec<u8>,
+        local_addr: Option<(std::net::IpAddr, u16)>,
+        remote_addr: Option<(std::net::IpAddr, u16)>,
     ) -> Result<IkeMessage> {
         // Validate state
         if context.state != IkeState::InitDone {
@@ -502,14 +532,36 @@ impl IkeSaInitExchange {
         let ke_payload = KePayload::new(KePayload::DH_GROUP_14, dh_public);
         let nonce_payload = NoncePayload::new(nonce)?;
 
-        let message = IkeMessage {
-            header,
-            payloads: vec![
-                IkePayload::SA(sa_payload),
-                IkePayload::KE(ke_payload),
-                IkePayload::Nonce(nonce_payload),
-            ],
-        };
+        let mut payloads = vec![
+            IkePayload::SA(sa_payload),
+            IkePayload::KE(ke_payload),
+            IkePayload::Nonce(nonce_payload),
+        ];
+
+        // Add NAT_DETECTION payloads if addresses are provided
+        if let (Some((local_ip, local_port)), Some((remote_ip, remote_port))) =
+            (local_addr, remote_addr)
+        {
+            use super::payload::{NatDetectionDestinationIpPayload, NatDetectionSourceIpPayload};
+            use crate::ipsec::nat::NatDetectionHash;
+
+            let spi_i = u64::from_be_bytes(request_header.initiator_spi);
+            let spi_r = u64::from_be_bytes(context.responder_spi);
+
+            // NAT_DETECTION_SOURCE_IP: hash of our (local) IP and port
+            let hash_local = NatDetectionHash::compute(spi_i, spi_r, local_ip, local_port);
+            payloads.push(IkePayload::NatDetectionSourceIp(
+                NatDetectionSourceIpPayload::new(hash_local.hash),
+            ));
+
+            // NAT_DETECTION_DESTINATION_IP: hash of peer (remote) IP and port
+            let hash_remote = NatDetectionHash::compute(spi_i, spi_r, remote_ip, remote_port);
+            payloads.push(IkePayload::NatDetectionDestinationIp(
+                NatDetectionDestinationIpPayload::new(hash_remote.hash),
+            ));
+        }
+
+        let message = IkeMessage { header, payloads };
 
         Ok(message)
     }
@@ -641,7 +693,11 @@ impl IkeAuthExchange {
                 IkePayload::IDi(id) | IkePayload::IDr(id) => id.to_payload_data(),
                 IkePayload::AUTH(auth) => auth.to_payload_data(),
                 IkePayload::TSi(ts) | IkePayload::TSr(ts) => ts.to_payload_data(),
-                _ => return Err(Error::Internal("Unsupported payload type for encryption".into())),
+                _ => {
+                    return Err(Error::Internal(
+                        "Unsupported payload type for encryption".into(),
+                    ))
+                }
             };
 
             let length = 4 + payload_data.len();
@@ -744,7 +800,9 @@ impl IkeAuthExchange {
 
         // Remove padding
         if plaintext.is_empty() {
-            return Err(Error::InvalidPayload("Empty plaintext after decryption".into()));
+            return Err(Error::InvalidPayload(
+                "Empty plaintext after decryption".into(),
+            ));
         }
 
         let pad_len = *plaintext.last().unwrap() as usize;
@@ -771,10 +829,7 @@ impl IkeAuthExchange {
     /// # Returns
     ///
     /// Returns vector of parsed payloads
-    fn parse_payload_chain(
-        mut current_type: PayloadType,
-        data: &[u8],
-    ) -> Result<Vec<IkePayload>> {
+    fn parse_payload_chain(mut current_type: PayloadType, data: &[u8]) -> Result<Vec<IkePayload>> {
         use super::message::IkeMessage;
         use super::payload::PayloadHeader;
 
@@ -794,8 +849,10 @@ impl IkeAuthExchange {
             }
 
             // Parse the current payload using its type
-            let payload =
-                IkeMessage::parse_payload(current_type, &data[offset..offset + header.length as usize])?;
+            let payload = IkeMessage::parse_payload(
+                current_type,
+                &data[offset..offset + header.length as usize],
+            )?;
 
             payloads.push(payload);
             offset += header.length as usize;
@@ -888,7 +945,7 @@ impl IkeAuthExchange {
                     20 => CipherAlgorithm::AesGcm128, // ENCR_AES_GCM_16 with 128-bit key
                     19 => CipherAlgorithm::AesGcm256, // ENCR_AES_GCM_16 with 256-bit key (non-standard)
                     28 => CipherAlgorithm::ChaCha20Poly1305, // ENCR_CHACHA20_POLY1305
-                    _ => CipherAlgorithm::AesGcm128, // Default
+                    _ => CipherAlgorithm::AesGcm128,  // Default
                 }
             })
             .unwrap_or(CipherAlgorithm::AesGcm128);
@@ -948,7 +1005,8 @@ impl IkeAuthExchange {
         let ike_header_bytes = header.to_bytes();
 
         // Encrypt inner payloads
-        let sk_payload = Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+        let sk_payload =
+            Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
 
         // Build final message with SK payload
         let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
@@ -984,7 +1042,12 @@ impl IkeAuthExchange {
         request: &IkeMessage,
         psk: &[u8],
         configured_proposals: &[Proposal],
-    ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+    ) -> Result<(
+        IdPayload,
+        Proposal,
+        super::payload::TrafficSelectorsPayload,
+        super::payload::TrafficSelectorsPayload,
+    )> {
         use super::auth;
         use super::constants::ExchangeType;
         use crate::ipsec::crypto::cipher::CipherAlgorithm;
@@ -1005,7 +1068,9 @@ impl IkeAuthExchange {
 
         // Validate this is from initiator
         if !request.header.flags.is_initiator() {
-            return Err(Error::InvalidMessage("IKE_AUTH request must be from initiator".into()));
+            return Err(Error::InvalidMessage(
+                "IKE_AUTH request must be from initiator".into(),
+            ));
         }
 
         // Get the selected proposal
@@ -1019,13 +1084,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Prf)
-            .map(|t| {
-                match t.transform_id {
-                    2 => PrfAlgorithm::HmacSha256,
-                    3 => PrfAlgorithm::HmacSha384,
-                    4 => PrfAlgorithm::HmacSha512,
-                    _ => PrfAlgorithm::HmacSha256,
-                }
+            .map(|t| match t.transform_id {
+                2 => PrfAlgorithm::HmacSha256,
+                3 => PrfAlgorithm::HmacSha384,
+                4 => PrfAlgorithm::HmacSha512,
+                _ => PrfAlgorithm::HmacSha256,
             })
             .unwrap_or(PrfAlgorithm::HmacSha256);
 
@@ -1034,13 +1097,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Encr)
-            .map(|t| {
-                match t.transform_id {
-                    20 => CipherAlgorithm::AesGcm128,
-                    19 => CipherAlgorithm::AesGcm256,
-                    28 => CipherAlgorithm::ChaCha20Poly1305,
-                    _ => CipherAlgorithm::AesGcm128,
-                }
+            .map(|t| match t.transform_id {
+                20 => CipherAlgorithm::AesGcm128,
+                19 => CipherAlgorithm::AesGcm256,
+                28 => CipherAlgorithm::ChaCha20Poly1305,
+                _ => CipherAlgorithm::AesGcm128,
             })
             .unwrap_or(CipherAlgorithm::AesGcm128);
 
@@ -1081,14 +1142,16 @@ impl IkeAuthExchange {
                 IkePayload::SA(sa) => child_sa = Some(sa.clone()),
                 IkePayload::TSi(ts) => ts_i = Some(ts.clone()),
                 IkePayload::TSr(ts) => ts_r = Some(ts.clone()),
-                _ => {}, // Ignore other payloads (CERT, CERTREQ, etc.)
+                _ => {} // Ignore other payloads (CERT, CERTREQ, etc.)
             }
         }
 
         // Validate required payloads are present
         let peer_id = peer_id.ok_or_else(|| Error::InvalidMessage("Missing IDi payload".into()))?;
-        let auth_payload = auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
-        let child_sa = child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
+        let auth_payload =
+            auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
+        let child_sa =
+            child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
         let ts_i = ts_i.ok_or_else(|| Error::InvalidMessage("Missing TSi payload".into()))?;
         let ts_r = ts_r.ok_or_else(|| Error::InvalidMessage("Missing TSr payload".into()))?;
 
@@ -1124,7 +1187,8 @@ impl IkeAuthExchange {
         }
 
         // Select Child SA proposal
-        let selected_child_proposal = select_proposal(&child_sa.proposals, configured_proposals)?.clone();
+        let selected_child_proposal =
+            select_proposal(&child_sa.proposals, configured_proposals)?.clone();
 
         Ok((peer_id, selected_child_proposal, ts_i, ts_r))
     }
@@ -1190,13 +1254,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Prf)
-            .map(|t| {
-                match t.transform_id {
-                    2 => PrfAlgorithm::HmacSha256,
-                    3 => PrfAlgorithm::HmacSha384,
-                    4 => PrfAlgorithm::HmacSha512,
-                    _ => PrfAlgorithm::HmacSha256,
-                }
+            .map(|t| match t.transform_id {
+                2 => PrfAlgorithm::HmacSha256,
+                3 => PrfAlgorithm::HmacSha384,
+                4 => PrfAlgorithm::HmacSha512,
+                _ => PrfAlgorithm::HmacSha256,
             })
             .unwrap_or(PrfAlgorithm::HmacSha256);
 
@@ -1205,13 +1267,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Encr)
-            .map(|t| {
-                match t.transform_id {
-                    20 => CipherAlgorithm::AesGcm128,
-                    19 => CipherAlgorithm::AesGcm256,
-                    28 => CipherAlgorithm::ChaCha20Poly1305,
-                    _ => CipherAlgorithm::AesGcm128,
-                }
+            .map(|t| match t.transform_id {
+                20 => CipherAlgorithm::AesGcm128,
+                19 => CipherAlgorithm::AesGcm256,
+                28 => CipherAlgorithm::ChaCha20Poly1305,
+                _ => CipherAlgorithm::AesGcm128,
             })
             .unwrap_or(CipherAlgorithm::AesGcm128);
 
@@ -1261,14 +1321,15 @@ impl IkeAuthExchange {
             ExchangeType::IkeAuth,
             flags,
             request.header.message_id, // Same message ID as request
-            0, // Length computed during serialization
+            0,                         // Length computed during serialization
         );
 
         // Serialize IKE header for AAD
         let ike_header_bytes = header.to_bytes();
 
         // Encrypt inner payloads
-        let sk_payload = Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+        let sk_payload =
+            Self::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
 
         // Build final message
         let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
@@ -1305,7 +1366,12 @@ impl IkeAuthExchange {
         ike_sa_init_response: &[u8],
         response: &IkeMessage,
         _psk: &[u8],
-    ) -> Result<(IdPayload, Proposal, super::payload::TrafficSelectorsPayload, super::payload::TrafficSelectorsPayload)> {
+    ) -> Result<(
+        IdPayload,
+        Proposal,
+        super::payload::TrafficSelectorsPayload,
+        super::payload::TrafficSelectorsPayload,
+    )> {
         use super::auth;
         use super::constants::ExchangeType;
         use crate::ipsec::crypto::cipher::CipherAlgorithm;
@@ -1340,13 +1406,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Prf)
-            .map(|t| {
-                match t.transform_id {
-                    2 => PrfAlgorithm::HmacSha256,
-                    3 => PrfAlgorithm::HmacSha384,
-                    4 => PrfAlgorithm::HmacSha512,
-                    _ => PrfAlgorithm::HmacSha256,
-                }
+            .map(|t| match t.transform_id {
+                2 => PrfAlgorithm::HmacSha256,
+                3 => PrfAlgorithm::HmacSha384,
+                4 => PrfAlgorithm::HmacSha512,
+                _ => PrfAlgorithm::HmacSha256,
             })
             .unwrap_or(PrfAlgorithm::HmacSha256);
 
@@ -1355,13 +1419,11 @@ impl IkeAuthExchange {
             .transforms
             .iter()
             .find(|t| t.transform_type == super::proposal::TransformType::Encr)
-            .map(|t| {
-                match t.transform_id {
-                    20 => CipherAlgorithm::AesGcm128,
-                    19 => CipherAlgorithm::AesGcm256,
-                    28 => CipherAlgorithm::ChaCha20Poly1305,
-                    _ => CipherAlgorithm::AesGcm128,
-                }
+            .map(|t| match t.transform_id {
+                20 => CipherAlgorithm::AesGcm128,
+                19 => CipherAlgorithm::AesGcm256,
+                28 => CipherAlgorithm::ChaCha20Poly1305,
+                _ => CipherAlgorithm::AesGcm128,
             })
             .unwrap_or(CipherAlgorithm::AesGcm128);
 
@@ -1402,14 +1464,16 @@ impl IkeAuthExchange {
                 IkePayload::SA(sa) => child_sa = Some(sa.clone()),
                 IkePayload::TSi(ts) => ts_i = Some(ts.clone()),
                 IkePayload::TSr(ts) => ts_r = Some(ts.clone()),
-                _ => {}, // Ignore other payloads
+                _ => {} // Ignore other payloads
             }
         }
 
         // Validate required payloads are present
         let peer_id = peer_id.ok_or_else(|| Error::InvalidMessage("Missing IDr payload".into()))?;
-        let auth_payload = auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
-        let child_sa = child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
+        let auth_payload =
+            auth_payload.ok_or_else(|| Error::InvalidMessage("Missing AUTH payload".into()))?;
+        let child_sa =
+            child_sa.ok_or_else(|| Error::InvalidMessage("Missing SA payload".into()))?;
         let ts_i = ts_i.ok_or_else(|| Error::InvalidMessage("Missing TSi payload".into()))?;
         let ts_r = ts_r.ok_or_else(|| Error::InvalidMessage("Missing TSr payload".into()))?;
 
@@ -1565,10 +1629,7 @@ impl CreateChildSaExchange {
         };
 
         // Build inner payloads
-        let mut inner_payloads = vec![
-            IkePayload::SA(sa_payload),
-            IkePayload::Nonce(nonce_payload),
-        ];
+        let mut inner_payloads = vec![IkePayload::SA(sa_payload), IkePayload::Nonce(nonce_payload)];
 
         // Add KEi if using PFS
         if use_pfs {
@@ -1632,12 +1693,8 @@ impl CreateChildSaExchange {
         let ike_header_bytes = header.to_bytes();
 
         // Encrypt inner payloads
-        let sk_payload = IkeAuthExchange::encrypt_payloads(
-            context,
-            &ike_header_bytes,
-            &inner_payloads,
-            cipher,
-        )?;
+        let sk_payload =
+            IkeAuthExchange::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
 
         // Build message
         let message = IkeMessage {
@@ -1860,12 +1917,16 @@ impl CreateChildSaExchange {
             .ok_or_else(|| Error::InvalidProposal("No encryption transform".into()))?;
 
         let encr_key_len = match EncrTransformId::from_u16(encr_transform.transform_id) {
-            Some(EncrTransformId::AesGcm128) => 16,  // 128-bit key
-            Some(EncrTransformId::AesGcm256) => 32,  // 256-bit key
+            Some(EncrTransformId::AesGcm128) => 16,        // 128-bit key
+            Some(EncrTransformId::AesGcm256) => 32,        // 256-bit key
             Some(EncrTransformId::ChaCha20Poly1305) => 32, // 256-bit key
             Some(EncrTransformId::AesCbc128) => 16,
             Some(EncrTransformId::AesCbc256) => 32,
-            _ => return Err(Error::InvalidProposal("Unsupported encryption algorithm".into())),
+            _ => {
+                return Err(Error::InvalidProposal(
+                    "Unsupported encryption algorithm".into(),
+                ))
+            }
         };
 
         // Find integrity transform (may not exist for AEAD)
@@ -1878,7 +1939,11 @@ impl CreateChildSaExchange {
                 Some(IntegTransformId::HmacSha256_128) => 32, // HMAC-SHA256 uses 32-byte key
                 Some(IntegTransformId::HmacSha384_192) => 48, // HMAC-SHA384 uses 48-byte key
                 Some(IntegTransformId::HmacSha512_256) => 64, // HMAC-SHA512 uses 64-byte key
-                None => return Err(Error::InvalidProposal("Unsupported integrity algorithm".into())),
+                None => {
+                    return Err(Error::InvalidProposal(
+                        "Unsupported integrity algorithm".into(),
+                    ))
+                }
             }
         } else {
             0 // AEAD ciphers don't have separate integrity transform
@@ -1938,10 +2003,7 @@ impl CreateChildSaExchange {
         };
 
         // Build inner payloads
-        let mut inner_payloads = vec![
-            IkePayload::SA(sa_payload),
-            IkePayload::Nonce(nonce_payload),
-        ];
+        let mut inner_payloads = vec![IkePayload::SA(sa_payload), IkePayload::Nonce(nonce_payload)];
 
         // Add KEr if DH public key provided (PFS)
         if let Some(dh_key) = dh_public_key {
@@ -1999,18 +2061,14 @@ impl CreateChildSaExchange {
             exchange_type: ExchangeType::CreateChildSa,
             flags: IkeFlags::response(context.is_initiator),
             message_id: request_header.message_id, // Same as request
-            length: 0, // Will be calculated
+            length: 0,                             // Will be calculated
         };
 
         let ike_header_bytes = header.to_bytes();
 
         // Encrypt inner payloads
-        let sk_payload = IkeAuthExchange::encrypt_payloads(
-            context,
-            &ike_header_bytes,
-            &inner_payloads,
-            cipher,
-        )?;
+        let sk_payload =
+            IkeAuthExchange::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
 
         // Build response message
         Ok(IkeMessage {
@@ -2275,8 +2333,9 @@ mod tests {
         let dh_public = vec![0xAA; 256];
         let nonce = vec![0xBB; 32];
 
-        let msg = IkeSaInitExchange::create_request(&mut ctx, proposals, dh_public, nonce)
-            .expect("Failed to create request");
+        let msg =
+            IkeSaInitExchange::create_request(&mut ctx, proposals, dh_public, nonce, None, None)
+                .expect("Failed to create request");
 
         assert_eq!(msg.header.exchange_type, ExchangeType::IkeSaInit);
         assert!(msg.header.flags.is_initiator());
@@ -2295,6 +2354,8 @@ mod tests {
             vec![create_test_proposal()],
             vec![0xAA; 256],
             vec![0xBB; 32],
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -2367,9 +2428,9 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
+        use super::super::payload::{AuthMethod, AuthPayload};
         use crate::ipsec::crypto::cipher::CipherAlgorithm;
         use crate::ipsec::crypto::PrfAlgorithm;
-        use super::super::payload::{AuthMethod, AuthPayload};
 
         // Setup initiator context
         let mut ctx_i = IkeSaContext::new_initiator([1u8; 8]);
@@ -2379,7 +2440,8 @@ mod tests {
         ctx_i.shared_secret = Some(vec![0x03; 256]);
 
         // Derive keys (AES-GCM-128: 16-byte key, 16-byte integ)
-        ctx_i.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+        ctx_i
+            .derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
             .expect("Key derivation failed");
 
         // Setup responder context (same keys, different role)
@@ -2387,7 +2449,8 @@ mod tests {
         ctx_r.nonce_i = Some(vec![0x01; 32]);
         ctx_r.nonce_r = Some(vec![0x02; 32]);
         ctx_r.shared_secret = Some(vec![0x03; 256]);
-        ctx_r.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+        ctx_r
+            .derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
             .expect("Key derivation failed");
 
         // Create test payload
@@ -2441,16 +2504,24 @@ mod tests {
         let payloads: Vec<IkePayload> = vec![];
         let ike_header = vec![0x00; 28];
 
-        let result = IkeAuthExchange::encrypt_payloads(&ctx, &ike_header, &payloads, CipherAlgorithm::AesGcm128);
+        let result = IkeAuthExchange::encrypt_payloads(
+            &ctx,
+            &ike_header,
+            &payloads,
+            CipherAlgorithm::AesGcm128,
+        );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Encryption key not derived"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Encryption key not derived"));
     }
 
     #[test]
     fn test_decrypt_with_wrong_aad() {
+        use super::super::payload::{AuthMethod, AuthPayload};
         use crate::ipsec::crypto::cipher::CipherAlgorithm;
         use crate::ipsec::crypto::PrfAlgorithm;
-        use super::super::payload::{AuthMethod, AuthPayload};
 
         // Setup context with derived keys
         let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
@@ -2470,8 +2541,9 @@ mod tests {
         let correct_header = vec![0x00; 28];
 
         let cipher = CipherAlgorithm::AesGcm128;
-        let sk_payload = IkeAuthExchange::encrypt_payloads(&ctx, &correct_header, &payloads, cipher)
-            .expect("Encryption failed");
+        let sk_payload =
+            IkeAuthExchange::encrypt_payloads(&ctx, &correct_header, &payloads, cipher)
+                .expect("Encryption failed");
 
         // Try to decrypt with wrong AAD
         let wrong_header = vec![0xFF; 28];
@@ -2489,9 +2561,9 @@ mod tests {
 
     #[test]
     fn test_decrypt_with_corrupted_ciphertext() {
+        use super::super::payload::{AuthMethod, AuthPayload, EncryptedPayload};
         use crate::ipsec::crypto::cipher::CipherAlgorithm;
         use crate::ipsec::crypto::PrfAlgorithm;
-        use super::super::payload::{AuthMethod, AuthPayload, EncryptedPayload};
 
         // Setup context with derived keys
         let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
@@ -2536,10 +2608,12 @@ mod tests {
 
     #[test]
     fn test_ike_auth_create_request() {
-        use crate::ipsec::crypto::PrfAlgorithm;
         use super::super::constants::ExchangeType;
-        use super::super::payload::{IdPayload, IdType, TrafficSelector, TrafficSelectorsPayload, TsType};
+        use super::super::payload::{
+            IdPayload, IdType, TrafficSelector, TrafficSelectorsPayload, TsType,
+        };
         use super::super::proposal::{ProtocolId, Transform, TransformType};
+        use crate::ipsec::crypto::PrfAlgorithm;
 
         // Setup initiator context with derived keys
         let mut ctx = IkeSaContext::new_initiator([1u8; 8]);
@@ -2667,7 +2741,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No proposal selected"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No proposal selected"));
     }
 
     // TODO: End-to-end integration test for complete IKE_SA_INIT + IKE_AUTH flow
@@ -2683,12 +2760,11 @@ mod tests {
     fn test_complete_ike_sa_init_and_ike_auth_exchange() {
         use super::super::constants::ExchangeType;
         use super::super::payload::{
-            IdPayload, IdType, IkePayload,
-            TrafficSelector, TrafficSelectorsPayload,
+            IdPayload, IdType, IkePayload, TrafficSelector, TrafficSelectorsPayload,
         };
         use super::super::proposal::{
-            DhTransformId, EncrTransformId, PrfTransformId, ProtocolId, Transform,
-            TransformType, Proposal,
+            DhTransformId, EncrTransformId, PrfTransformId, Proposal, ProtocolId, Transform,
+            TransformType,
         };
         use crate::ipsec::crypto::PrfAlgorithm;
         use rand::Rng;
@@ -2704,9 +2780,18 @@ mod tests {
 
         // Initiator creates proposals
         let proposal = Proposal::new(1, ProtocolId::Ike)
-            .add_transform(Transform::new(TransformType::Encr, EncrTransformId::AesGcm128 as u16))
-            .add_transform(Transform::new(TransformType::Prf, PrfTransformId::HmacSha256 as u16))
-            .add_transform(Transform::new(TransformType::Dh, DhTransformId::Group14 as u16));
+            .add_transform(Transform::new(
+                TransformType::Encr,
+                EncrTransformId::AesGcm128 as u16,
+            ))
+            .add_transform(Transform::new(
+                TransformType::Prf,
+                PrfTransformId::HmacSha256 as u16,
+            ))
+            .add_transform(Transform::new(
+                TransformType::Dh,
+                DhTransformId::Group14 as u16,
+            ));
 
         // Generate DH keys and nonce for initiator
         let mut rng = rand::thread_rng();
@@ -2723,18 +2808,18 @@ mod tests {
             vec![proposal.clone()],
             dh_i_public.clone(),
             nonce_i.clone(),
-        ).expect("Failed to create IKE_SA_INIT request");
+            None,
+            None,
+        )
+        .expect("Failed to create IKE_SA_INIT request");
 
         // Serialize the request
         let init_req_bytes = init_req.to_bytes();
 
         // Responder processes request
         let configured_proposals = vec![proposal.clone()];
-        IkeSaInitExchange::process_request(
-            &mut ctx_r,
-            &init_req,
-            &configured_proposals,
-        ).expect("Failed to process IKE_SA_INIT request");
+        IkeSaInitExchange::process_request(&mut ctx_r, &init_req, &configured_proposals)
+            .expect("Failed to process IKE_SA_INIT request");
 
         // Generate DH keys and nonce for responder
         let dh_r_public = vec![0x02; 256]; // Simplified DH public key
@@ -2751,7 +2836,10 @@ mod tests {
             proposal.clone(),
             dh_r_public.clone(),
             nonce_r.clone(),
-        ).expect("Failed to create IKE_SA_INIT response");
+            None,
+            None,
+        )
+        .expect("Failed to create IKE_SA_INIT response");
 
         // Serialize the response
         let init_resp_bytes = init_resp.to_bytes();
@@ -2771,7 +2859,8 @@ mod tests {
         ctx_r.shared_secret = Some(shared_secret.clone());
 
         // Derive keys on initiator side
-        ctx_i.derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
+        ctx_i
+            .derive_keys(PrfAlgorithm::HmacSha256, 16, 16)
             .expect("Initiator key derivation failed");
 
         // For this test, copy keys from initiator to responder to ensure they match
@@ -2792,8 +2881,14 @@ mod tests {
 
         // Create child SA proposals
         let child_proposal = Proposal::new(1, ProtocolId::Esp)
-            .add_transform(Transform::new(TransformType::Encr, EncrTransformId::AesGcm128 as u16))
-            .add_transform(Transform::new(TransformType::Prf, PrfTransformId::HmacSha256 as u16));
+            .add_transform(Transform::new(
+                TransformType::Encr,
+                EncrTransformId::AesGcm128 as u16,
+            ))
+            .add_transform(Transform::new(
+                TransformType::Prf,
+                PrfTransformId::HmacSha256 as u16,
+            ));
 
         // Create traffic selectors
         let ts_i = TrafficSelectorsPayload {
@@ -2817,7 +2912,8 @@ mod tests {
             vec![child_proposal.clone()],
             ts_i.clone(),
             ts_r.clone(),
-        ).expect("Failed to create IKE_AUTH request");
+        )
+        .expect("Failed to create IKE_AUTH request");
 
         // Initiator should now be in AuthSent state
         assert_eq!(ctx_i.state, IkeState::AuthSent);
@@ -2825,11 +2921,12 @@ mod tests {
         // Responder processes IKE_AUTH request
         let (peer_id_i, selected_child, ts_i_resp, ts_r_resp) = IkeAuthExchange::process_request(
             &mut ctx_r,
-            &init_req_bytes,  // Use the IKE_SA_INIT request, not response
+            &init_req_bytes, // Use the IKE_SA_INIT request, not response
             &auth_req,
             psk,
             &[child_proposal.clone()],
-        ).expect("Failed to process IKE_AUTH request");
+        )
+        .expect("Failed to process IKE_AUTH request");
 
         // Verify extracted data
         assert_eq!(peer_id_i.id_type, IdType::Ipv4Addr);
@@ -2853,18 +2950,16 @@ mod tests {
             selected_child.clone(),
             ts_i_resp,
             ts_r_resp,
-        ).expect("Failed to create IKE_AUTH response");
+        )
+        .expect("Failed to create IKE_AUTH response");
 
         // Responder should now be in Established state
         assert_eq!(ctx_r.state, IkeState::Established);
 
         // Initiator processes IKE_AUTH response
-        let (peer_id_r, child_prop, ts_i_final, ts_r_final) = IkeAuthExchange::process_response(
-            &mut ctx_i,
-            &init_resp_bytes,
-            &auth_resp,
-            psk,
-        ).expect("Failed to process IKE_AUTH response");
+        let (peer_id_r, child_prop, ts_i_final, ts_r_final) =
+            IkeAuthExchange::process_response(&mut ctx_i, &init_resp_bytes, &auth_resp, psk)
+                .expect("Failed to process IKE_AUTH response");
 
         // Initiator should now be in Established state
         assert_eq!(ctx_i.state, IkeState::Established);

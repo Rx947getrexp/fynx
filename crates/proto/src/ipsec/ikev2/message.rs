@@ -117,9 +117,8 @@ impl IkeHeader {
         }
 
         // Parse exchange type
-        let exchange_type = ExchangeType::from_u8(data[18]).ok_or_else(|| {
-            Error::UnsupportedExchangeType(data[18])
-        })?;
+        let exchange_type = ExchangeType::from_u8(data[18])
+            .ok_or_else(|| Error::UnsupportedExchangeType(data[18]))?;
 
         // Parse flags
         let flags = IkeFlags::new(data[19]);
@@ -375,6 +374,8 @@ impl IkeMessage {
                 IkePayload::TSi(ts) => ts.total_length() as usize,
                 IkePayload::TSr(ts) => ts.total_length() as usize,
                 IkePayload::SK(sk) => sk.total_length() as usize,
+                IkePayload::NatDetectionSourceIp(nat_d) => nat_d.payload_length() as usize,
+                IkePayload::NatDetectionDestinationIp(nat_d) => nat_d.payload_length() as usize,
                 IkePayload::Unknown { data, .. } => PayloadHeader::SIZE + data.len(),
             })
             .sum();
@@ -443,9 +444,21 @@ impl IkeMessage {
             IkePayload::TSi(ts) => (PayloadType::TSi, ts.to_payload_data(), ts.total_length()),
             IkePayload::TSr(ts) => (PayloadType::TSr, ts.to_payload_data(), ts.total_length()),
             IkePayload::SK(sk) => (PayloadType::SK, sk.to_payload_data(), sk.total_length()),
-            IkePayload::Unknown { payload_type, data } => {
-                (*payload_type, data.clone(), (PayloadHeader::SIZE + data.len()) as u16)
-            }
+            IkePayload::NatDetectionSourceIp(nat_d) => (
+                PayloadType::NatDetectionSourceIp,
+                nat_d.to_bytes(),
+                nat_d.payload_length(),
+            ),
+            IkePayload::NatDetectionDestinationIp(nat_d) => (
+                PayloadType::NatDetectionDestinationIp,
+                nat_d.to_bytes(),
+                nat_d.payload_length(),
+            ),
+            IkePayload::Unknown { payload_type, data } => (
+                *payload_type,
+                data.clone(),
+                (PayloadHeader::SIZE + data.len()) as u16,
+            ),
         };
 
         // Write payload header

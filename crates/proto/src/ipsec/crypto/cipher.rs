@@ -41,7 +41,7 @@ impl CipherAlgorithm {
     pub fn iv_len(self) -> usize {
         match self {
             CipherAlgorithm::AesGcm128 | CipherAlgorithm::AesGcm256 => 8, // RFC 4106
-            CipherAlgorithm::ChaCha20Poly1305 => 12,                       // RFC 7539
+            CipherAlgorithm::ChaCha20Poly1305 => 12,                      // RFC 7539
         }
     }
 
@@ -67,13 +67,7 @@ impl CipherAlgorithm {
     /// # Returns
     ///
     /// Returns ciphertext with authentication tag appended
-    pub fn encrypt(
-        self,
-        key: &[u8],
-        iv: &[u8],
-        plaintext: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub fn encrypt(self, key: &[u8], iv: &[u8], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         // Validate key length
         if key.len() != self.key_len() {
             return Err(Error::InvalidKeyLength {
@@ -159,13 +153,7 @@ impl CipherAlgorithm {
     /// # Returns
     ///
     /// Returns decrypted plaintext
-    pub fn decrypt(
-        self,
-        key: &[u8],
-        iv: &[u8],
-        ciphertext: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>> {
+    pub fn decrypt(self, key: &[u8], iv: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         // Validate key length
         if key.len() != self.key_len() {
             return Err(Error::InvalidKeyLength {

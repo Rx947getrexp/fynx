@@ -136,23 +136,23 @@ impl NatDetectionHash {
         let mut hasher = Sha1::new();
 
         // Add SPIi (8 bytes, big-endian)
-        hasher.update(&spi_i.to_be_bytes());
+        hasher.update(spi_i.to_be_bytes());
 
         // Add SPIr (8 bytes, big-endian)
-        hasher.update(&spi_r.to_be_bytes());
+        hasher.update(spi_r.to_be_bytes());
 
         // Add IP address
         match ip {
             IpAddr::V4(ipv4) => {
-                hasher.update(&ipv4.octets());
+                hasher.update(ipv4.octets());
             }
             IpAddr::V6(ipv6) => {
-                hasher.update(&ipv6.octets());
+                hasher.update(ipv6.octets());
             }
         }
 
         // Add port (2 bytes, big-endian)
-        hasher.update(&port.to_be_bytes());
+        hasher.update(port.to_be_bytes());
 
         // Compute SHA-1 hash
         let result = hasher.finalize();
@@ -421,7 +421,7 @@ impl UdpEncapsulation {
         }
 
         // Check for Non-ESP marker
-        if &data[0..4] == NON_ESP_MARKER {
+        if data[0..4] == NON_ESP_MARKER {
             // IKE message - remove marker
             Ok((PacketType::Ike, &data[4..]))
         } else {
@@ -447,7 +447,7 @@ impl UdpEncapsulation {
             });
         }
 
-        if &data[0..4] == NON_ESP_MARKER {
+        if data[0..4] == NON_ESP_MARKER {
             Ok(PacketType::Ike)
         } else {
             Ok(PacketType::Esp)
@@ -589,8 +589,10 @@ mod tests {
 
     #[test]
     fn test_nat_detection_hash_from_bytes() {
-        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-                     0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14];
+        let bytes = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+        ];
 
         let hash = NatDetectionHash::from_bytes(&bytes).unwrap();
         assert_eq!(hash.as_bytes(), &bytes);
@@ -613,14 +615,8 @@ mod tests {
         let local_port = 500;
         let remote_port = 500;
 
-        let mut detection = NatDetection::new(
-            spi_i,
-            spi_r,
-            local_ip,
-            local_port,
-            remote_ip,
-            remote_port,
-        );
+        let mut detection =
+            NatDetection::new(spi_i, spi_r, local_ip, local_port, remote_ip, remote_port);
 
         // Simulate peer sending correct hashes (no NAT)
         let peer_source = NatDetectionHash::compute(spi_i, spi_r, remote_ip, remote_port);
@@ -645,14 +641,8 @@ mod tests {
         let nat_port = 54321; // Port changed by NAT
         let remote_port = 500;
 
-        let mut detection = NatDetection::new(
-            spi_i,
-            spi_r,
-            local_ip,
-            local_port,
-            remote_ip,
-            remote_port,
-        );
+        let mut detection =
+            NatDetection::new(spi_i, spi_r, local_ip, local_port, remote_ip, remote_port);
 
         // Peer sees our NAT'd address
         let peer_source = NatDetectionHash::compute(spi_i, spi_r, remote_ip, remote_port);
@@ -679,14 +669,8 @@ mod tests {
         let remote_port = 500;
         let remote_nat_port = 12345;
 
-        let mut detection = NatDetection::new(
-            spi_i,
-            spi_r,
-            local_ip,
-            local_port,
-            remote_ip,
-            remote_port,
-        );
+        let mut detection =
+            NatDetection::new(spi_i, spi_r, local_ip, local_port, remote_ip, remote_port);
 
         // We see peer's NAT'd address
         let peer_source = NatDetectionHash::compute(spi_i, spi_r, remote_nat_ip, remote_nat_port);
@@ -711,9 +695,7 @@ mod tests {
         let remote_ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
         let remote_nat_ip: IpAddr = Ipv4Addr::new(203, 0, 113, 2).into();
 
-        let mut detection = NatDetection::new(
-            spi_i, spi_r, local_ip, 500, remote_ip, 500,
-        );
+        let mut detection = NatDetection::new(spi_i, spi_r, local_ip, 500, remote_ip, 500);
 
         // Both sides see NAT'd addresses
         let peer_source = NatDetectionHash::compute(spi_i, spi_r, remote_nat_ip, 12345);

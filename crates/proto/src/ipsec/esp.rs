@@ -53,11 +53,7 @@
 //! let esp = EspPacket::from_bytes(&packet_bytes)?;
 //! ```
 
-use crate::ipsec::{
-    child_sa::ChildSa,
-    crypto::cipher::CipherAlgorithm,
-    Error, Result,
-};
+use crate::ipsec::{child_sa::ChildSa, crypto::cipher::CipherAlgorithm, Error, Result};
 
 /// ESP Packet
 ///
@@ -264,16 +260,10 @@ impl EspPacket {
     /// - `CryptoError` if encryption fails
     /// - `InvalidKeyLength` if SA keys are incorrect length
     /// - `Internal` if SA is not properly configured for encryption
-    pub fn encapsulate(
-        child_sa: &mut ChildSa,
-        payload: &[u8],
-        next_header: u8,
-    ) -> Result<Self> {
+    pub fn encapsulate(child_sa: &mut ChildSa, payload: &[u8], next_header: u8) -> Result<Self> {
         // Verify this is an outbound SA
         if child_sa.is_inbound {
-            return Err(Error::Internal(
-                "Cannot encapsulate with inbound SA".into(),
-            ));
+            return Err(Error::Internal("Cannot encapsulate with inbound SA".into()));
         }
 
         // Determine cipher algorithm from proposal
@@ -518,7 +508,13 @@ mod tests {
         let encrypted_data = vec![0xDD; 32];
         let icv = vec![0xEE; 32]; // HMAC-SHA256
 
-        let esp = EspPacket::new(spi, seq, iv.clone(), encrypted_data.clone(), Some(icv.clone()));
+        let esp = EspPacket::new(
+            spi,
+            seq,
+            iv.clone(),
+            encrypted_data.clone(),
+            Some(icv.clone()),
+        );
 
         assert_eq!(esp.spi, spi);
         assert_eq!(esp.sequence, seq);
@@ -618,13 +614,7 @@ mod tests {
 
     #[test]
     fn test_esp_packet_roundtrip_aead() {
-        let original = EspPacket::new(
-            0x11111111,
-            555,
-            vec![0x12; 8],
-            vec![0x34; 80],
-            None,
-        );
+        let original = EspPacket::new(0x11111111, 555, vec![0x12; 8], vec![0x34; 80], None);
 
         let bytes = original.to_bytes();
         let parsed = EspPacket::from_bytes(&bytes, 8, 0).unwrap();
@@ -692,7 +682,8 @@ mod tests {
         let esp = EspPacket::new(0x12345678, 1, vec![0; 8], vec![0; 64], None);
         assert_eq!(esp.len(), 8 + 8 + 64); // SPI + Seq + IV + Data
 
-        let esp_with_icv = EspPacket::new(0x12345678, 1, vec![0; 16], vec![0; 32], Some(vec![0; 32]));
+        let esp_with_icv =
+            EspPacket::new(0x12345678, 1, vec![0; 16], vec![0; 32], Some(vec![0; 32]));
         assert_eq!(esp_with_icv.len(), 8 + 16 + 32 + 32); // SPI + Seq + IV + Data + ICV
     }
 
@@ -711,7 +702,9 @@ mod tests {
             crypto::prf::PrfAlgorithm,
             ikev2::{
                 payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
-                proposal::{DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+                proposal::{
+                    DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType,
+                },
             },
         };
 
@@ -820,7 +813,8 @@ mod tests {
         assert!(esp_packet.icv.is_none()); // AEAD mode
 
         // Decapsulate
-        let (decrypted_payload, decrypted_next_header) = esp_packet.decapsulate(&mut sa_in).unwrap();
+        let (decrypted_payload, decrypted_next_header) =
+            esp_packet.decapsulate(&mut sa_in).unwrap();
 
         // Verify roundtrip
         assert_eq!(decrypted_payload, payload);
@@ -1090,7 +1084,9 @@ mod tests {
             crypto::prf::PrfAlgorithm,
             ikev2::{
                 payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
-                proposal::{DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+                proposal::{
+                    DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType,
+                },
             },
         };
 
@@ -1195,7 +1191,9 @@ mod tests {
             crypto::prf::PrfAlgorithm,
             ikev2::{
                 payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
-                proposal::{DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+                proposal::{
+                    DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType,
+                },
             },
         };
 
