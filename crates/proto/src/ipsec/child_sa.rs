@@ -31,6 +31,7 @@
 use crate::ipsec::{
     crypto::prf::PrfAlgorithm,
     ikev2::{payload::TrafficSelectorsPayload, proposal::Proposal},
+    replay::ReplayWindow,
     Error, Result,
 };
 use std::time::{Duration, Instant};
@@ -79,6 +80,12 @@ pub struct ChildSa {
     ///
     /// Incremented for each outbound packet. Used for anti-replay protection.
     pub seq_out: u64,
+
+    /// Anti-replay window (inbound only)
+    ///
+    /// Tracks received sequence numbers to detect and reject replay attacks.
+    /// Only used for inbound SAs. None for outbound SAs.
+    pub replay_window: Option<ReplayWindow>,
 
     /// Lifetime configuration
     pub lifetime: SaLifetime,
@@ -215,6 +222,13 @@ impl ChildSa {
         proposal: Proposal,
         lifetime: SaLifetime,
     ) -> Self {
+        // Create replay window for inbound SAs only
+        let replay_window = if is_inbound {
+            Some(ReplayWindow::default())
+        } else {
+            None
+        };
+
         ChildSa {
             spi,
             protocol: 50, // ESP
@@ -225,6 +239,7 @@ impl ChildSa {
             ts_r,
             proposal,
             seq_out: 0,
+            replay_window,
             lifetime,
             created_at: Instant::now(),
             bytes_processed: 0,

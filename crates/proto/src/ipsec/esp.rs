@@ -367,8 +367,16 @@ impl EspPacket {
             return Err(Error::InvalidSpi(self.spi));
         }
 
-        // TODO: Anti-replay check (implement in Phase 3 Stage 4)
-        // For now, just accept any sequence number
+        // Anti-replay check (RFC 4303 Section 3.4.3)
+        // Convert 32-bit sequence to 64-bit for replay window
+        let seq = self.sequence as u64;
+
+        if let Some(ref mut replay_window) = child_sa.replay_window {
+            if !replay_window.check_and_update(seq) {
+                return Err(Error::ReplayDetected(seq));
+            }
+        }
+        // If no replay window configured, accept packet (replay protection disabled)
 
         // Determine cipher algorithm from proposal
         let cipher = extract_cipher_algorithm(&child_sa.proposal)?;
@@ -771,6 +779,7 @@ mod tests {
             ts_r: ts_r.clone(),
             proposal: proposal.clone(),
             seq_out: 1,
+            replay_window: None, // Outbound SA doesn't need replay window
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
@@ -788,6 +797,7 @@ mod tests {
             ts_r,
             proposal,
             seq_out: 0,
+            replay_window: Some(crate::ipsec::replay::ReplayWindow::default()), // Enable anti-replay
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
@@ -863,6 +873,7 @@ mod tests {
             ts_r: ts,
             proposal,
             seq_out: 1,
+            replay_window: None,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
@@ -916,6 +927,7 @@ mod tests {
             ts_r: ts,
             proposal,
             seq_out: 1,
+            replay_window: None,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
@@ -969,6 +981,7 @@ mod tests {
             ts_r: ts,
             proposal,
             seq_out: 0,
+            replay_window: None,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
@@ -1056,5 +1069,284 @@ mod tests {
         };
         let result = extract_cipher_algorithm(&proposal);
         assert!(result.is_err());
+    }
+
+    // --- Anti-Replay Integration Tests ---
+
+    #[test]
+    fn test_anti_replay_reject_duplicate_sequence() {
+        use crate::ipsec::{
+            child_sa::{ChildSa, SaLifetime},
+            crypto::prf::PrfAlgorithm,
+            ikev2::{
+                payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
+                proposal::{DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+            },
+        };
+
+        // Create proposal and traffic selectors (same as roundtrip test)
+        let proposal = Proposal {
+            proposal_num: 1,
+            protocol_id: ProtocolId::Esp,
+            spi: vec![0x12, 0x34, 0x56, 0x78],
+            transforms: vec![
+                Transform {
+                    transform_type: TransformType::Encr,
+                    transform_id: 20,
+                    attributes: vec![],
+                },
+                Transform {
+                    transform_type: TransformType::Prf,
+                    transform_id: PrfTransformId::HmacSha256 as u16,
+                    attributes: vec![],
+                },
+                Transform {
+                    transform_type: TransformType::Dh,
+                    transform_id: DhTransformId::Group14 as u16,
+                    attributes: vec![],
+                },
+            ],
+        };
+
+        let ts = TrafficSelectorsPayload {
+            selectors: vec![TrafficSelector {
+                ts_type: TsType::Ipv4AddrRange,
+                ip_protocol_id: 0,
+                start_port: 0,
+                end_port: 65535,
+                start_address: vec![0; 4],
+                end_address: vec![255; 4],
+            }],
+        };
+
+        let (sk_ei, _, _, _) = crate::ipsec::child_sa::derive_child_sa_keys(
+            PrfAlgorithm::HmacSha256,
+            &vec![0xAA; 32],
+            &vec![0xBB; 32],
+            &vec![0xCC; 32],
+            None,
+            16,
+            0,
+        );
+
+        let mut sa_out = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: false,
+            sk_e: sk_ei.clone(),
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts.clone(),
+            proposal: proposal.clone(),
+            seq_out: 1,
+            replay_window: None,
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        let mut sa_in = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: true,
+            sk_e: sk_ei,
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts,
+            proposal,
+            seq_out: 0,
+            replay_window: Some(crate::ipsec::replay::ReplayWindow::default()),
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        // Encrypt and send first packet
+        let esp1 = EspPacket::encapsulate(&mut sa_out, b"First packet", 4).unwrap();
+
+        // Decrypt first packet - should succeed
+        let (payload1, _) = esp1.decapsulate(&mut sa_in).unwrap();
+        assert_eq!(payload1, b"First packet");
+
+        // Try to decrypt same packet again - should fail (replay detected)
+        let result = esp1.decapsulate(&mut sa_in);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::ReplayDetected(_)));
+    }
+
+    #[test]
+    fn test_anti_replay_accept_out_of_order() {
+        use crate::ipsec::{
+            child_sa::{ChildSa, SaLifetime},
+            crypto::prf::PrfAlgorithm,
+            ikev2::{
+                payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
+                proposal::{DhTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+            },
+        };
+
+        let proposal = Proposal {
+            proposal_num: 1,
+            protocol_id: ProtocolId::Esp,
+            spi: vec![0x12, 0x34, 0x56, 0x78],
+            transforms: vec![Transform {
+                transform_type: TransformType::Encr,
+                transform_id: 20,
+                attributes: vec![],
+            }],
+        };
+
+        let ts = TrafficSelectorsPayload {
+            selectors: vec![TrafficSelector {
+                ts_type: TsType::Ipv4AddrRange,
+                ip_protocol_id: 0,
+                start_port: 0,
+                end_port: 65535,
+                start_address: vec![0; 4],
+                end_address: vec![255; 4],
+            }],
+        };
+
+        let (sk_ei, _, _, _) = crate::ipsec::child_sa::derive_child_sa_keys(
+            PrfAlgorithm::HmacSha256,
+            &vec![0xAA; 32],
+            &vec![0xBB; 32],
+            &vec![0xCC; 32],
+            None,
+            16,
+            0,
+        );
+
+        let mut sa_out = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: false,
+            sk_e: sk_ei.clone(),
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts.clone(),
+            proposal: proposal.clone(),
+            seq_out: 1,
+            replay_window: None,
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        let mut sa_in = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: true,
+            sk_e: sk_ei,
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts,
+            proposal,
+            seq_out: 0,
+            replay_window: Some(crate::ipsec::replay::ReplayWindow::default()),
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        // Encrypt packets with sequences 1, 2, 3
+        let esp1 = EspPacket::encapsulate(&mut sa_out, b"Packet 1", 4).unwrap();
+        let esp2 = EspPacket::encapsulate(&mut sa_out, b"Packet 2", 4).unwrap();
+        let esp3 = EspPacket::encapsulate(&mut sa_out, b"Packet 3", 4).unwrap();
+
+        // Receive out of order: 3, 1, 2
+        assert!(esp3.decapsulate(&mut sa_in).is_ok()); // seq=3
+        assert!(esp1.decapsulate(&mut sa_in).is_ok()); // seq=1 (out of order, but within window)
+        assert!(esp2.decapsulate(&mut sa_in).is_ok()); // seq=2 (out of order, but within window)
+    }
+
+    #[test]
+    fn test_anti_replay_reject_old_packet() {
+        use crate::ipsec::{
+            child_sa::{ChildSa, SaLifetime},
+            crypto::prf::PrfAlgorithm,
+            ikev2::{
+                payload::{TrafficSelector, TrafficSelectorsPayload, TsType},
+                proposal::{Proposal, ProtocolId, Transform, TransformType},
+            },
+        };
+
+        let proposal = Proposal {
+            proposal_num: 1,
+            protocol_id: ProtocolId::Esp,
+            spi: vec![0x12, 0x34, 0x56, 0x78],
+            transforms: vec![Transform {
+                transform_type: TransformType::Encr,
+                transform_id: 20,
+                attributes: vec![],
+            }],
+        };
+
+        let ts = TrafficSelectorsPayload {
+            selectors: vec![TrafficSelector {
+                ts_type: TsType::Ipv4AddrRange,
+                ip_protocol_id: 0,
+                start_port: 0,
+                end_port: 65535,
+                start_address: vec![0; 4],
+                end_address: vec![255; 4],
+            }],
+        };
+
+        let (sk_ei, _, _, _) = crate::ipsec::child_sa::derive_child_sa_keys(
+            PrfAlgorithm::HmacSha256,
+            &vec![0xAA; 32],
+            &vec![0xBB; 32],
+            &vec![0xCC; 32],
+            None,
+            16,
+            0,
+        );
+
+        let mut sa_out = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: false,
+            sk_e: sk_ei.clone(),
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts.clone(),
+            proposal: proposal.clone(),
+            seq_out: 1,
+            replay_window: None,
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        let mut sa_in = ChildSa {
+            spi: 0x12345678,
+            protocol: ProtocolId::Esp as u8,
+            is_inbound: true,
+            sk_e: sk_ei,
+            sk_a: None,
+            ts_i: ts.clone(),
+            ts_r: ts,
+            proposal,
+            seq_out: 0,
+            replay_window: Some(crate::ipsec::replay::ReplayWindow::new(64)),
+            lifetime: SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+        };
+
+        // Create packet with seq=1
+        let esp_old = EspPacket::encapsulate(&mut sa_out, b"Old packet", 4).unwrap();
+
+        // Advance window by sending many packets
+        for _ in 0..100 {
+            let esp = EspPacket::encapsulate(&mut sa_out, b"New packet", 4).unwrap();
+            let _ = esp.decapsulate(&mut sa_in);
+        }
+
+        // Now try to decrypt old packet (seq=1) - should fail (too old, outside window)
+        let result = esp_old.decapsulate(&mut sa_in);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::ReplayDetected(_)));
     }
 }

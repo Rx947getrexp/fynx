@@ -67,7 +67,9 @@
 pub mod child_sa;
 pub mod crypto;
 pub mod error;
+pub mod esp;
 pub mod ikev2;
+pub mod replay;
 
 // Re-export commonly used types
 pub use error::{Error, Result};
