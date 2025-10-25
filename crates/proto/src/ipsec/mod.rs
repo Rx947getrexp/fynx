@@ -69,6 +69,7 @@ pub mod crypto;
 pub mod error;
 pub mod esp;
 pub mod ikev2;
+pub mod nat;
 pub mod replay;
 
 // Re-export commonly used types
