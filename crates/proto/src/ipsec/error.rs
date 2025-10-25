@@ -17,6 +17,9 @@ pub enum Error {
     /// Invalid IKEv2 payload
     InvalidPayload(String),
 
+    /// Invalid parameter value
+    InvalidParameter(String),
+
     /// Unsupported protocol version
     UnsupportedVersion(u8),
 
@@ -116,6 +119,7 @@ impl fmt::Display for Error {
         match self {
             Error::InvalidMessage(msg) => write!(f, "Invalid IKE message: {}", msg),
             Error::InvalidPayload(msg) => write!(f, "Invalid IKE payload: {}", msg),
+            Error::InvalidParameter(msg) => write!(f, "Invalid parameter: {}", msg),
             Error::UnsupportedVersion(v) => {
                 write!(f, "Unsupported IKE version: 0x{:02x}", v)
             }
