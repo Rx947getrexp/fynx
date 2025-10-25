@@ -780,9 +780,11 @@ mod tests {
             proposal: proposal.clone(),
             seq_out: 1,
             replay_window: None, // Outbound SA doesn't need replay window
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         // Create inbound SA with same key (for roundtrip test)
@@ -798,9 +800,11 @@ mod tests {
             proposal,
             seq_out: 0,
             replay_window: Some(crate::ipsec::replay::ReplayWindow::default()), // Enable anti-replay
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         // Original payload
@@ -874,9 +878,11 @@ mod tests {
             proposal,
             seq_out: 1,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let result = EspPacket::encapsulate(&mut sa, b"test", 4);
@@ -928,9 +934,11 @@ mod tests {
             proposal,
             seq_out: 1,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let esp = EspPacket::new(0x12345678, 1, vec![0; 8], vec![0; 32], None);
@@ -982,9 +990,11 @@ mod tests {
             proposal,
             seq_out: 0,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let esp = EspPacket::new(0xBBBBBBBB, 1, vec![0; 8], vec![0; 32], None);
@@ -1140,9 +1150,11 @@ mod tests {
             proposal: proposal.clone(),
             seq_out: 1,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let mut sa_in = ChildSa {
@@ -1156,9 +1168,11 @@ mod tests {
             proposal,
             seq_out: 0,
             replay_window: Some(crate::ipsec::replay::ReplayWindow::default()),
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         // Encrypt and send first packet
@@ -1228,9 +1242,11 @@ mod tests {
             proposal: proposal.clone(),
             seq_out: 1,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let mut sa_in = ChildSa {
@@ -1244,9 +1260,11 @@ mod tests {
             proposal,
             seq_out: 0,
             replay_window: Some(crate::ipsec::replay::ReplayWindow::default()),
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         // Encrypt packets with sequences 1, 2, 3
@@ -1314,9 +1332,11 @@ mod tests {
             proposal: proposal.clone(),
             seq_out: 1,
             replay_window: None,
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         let mut sa_in = ChildSa {
@@ -1330,9 +1350,11 @@ mod tests {
             proposal,
             seq_out: 0,
             replay_window: Some(crate::ipsec::replay::ReplayWindow::new(64)),
+            state: crate::ipsec::child_sa::ChildSaState::Active,
             lifetime: SaLifetime::default(),
             created_at: std::time::Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         };
 
         // Create packet with seq=1

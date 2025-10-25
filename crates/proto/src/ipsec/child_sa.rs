@@ -36,6 +36,33 @@ use crate::ipsec::{
 };
 use std::time::{Duration, Instant};
 
+/// Child SA State
+///
+/// Tracks the current state of a Child SA in its lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildSaState {
+    /// SA is active and can be used for traffic
+    Active,
+
+    /// SA is being rekeyed (new SA is being created)
+    ///
+    /// During rekeying, both old and new SAs can be used simultaneously
+    /// for a brief overlap period to ensure seamless transition.
+    Rekeying,
+
+    /// SA has been rekeyed and should be deleted
+    ///
+    /// The new SA is now active, and this old SA is waiting for
+    /// graceful deletion after ensuring no more packets are in flight.
+    Rekeyed,
+
+    /// SA has expired and must be deleted immediately
+    Expired,
+
+    /// SA has been deleted
+    Deleted,
+}
+
 /// Child Security Association
 ///
 /// Represents a unidirectional ESP Security Association used to protect
@@ -87,6 +114,9 @@ pub struct ChildSa {
     /// Only used for inbound SAs. None for outbound SAs.
     pub replay_window: Option<ReplayWindow>,
 
+    /// Current state of this SA
+    pub state: ChildSaState,
+
     /// Lifetime configuration
     pub lifetime: SaLifetime,
 
@@ -95,6 +125,9 @@ pub struct ChildSa {
 
     /// Byte count (for byte-based lifetime limits)
     pub bytes_processed: u64,
+
+    /// Timestamp when rekeying was initiated (None if not rekeying)
+    pub rekey_initiated_at: Option<Instant>,
 }
 
 /// SA Lifetime limits
@@ -240,9 +273,11 @@ impl ChildSa {
             proposal,
             seq_out: 0,
             replay_window,
+            state: ChildSaState::Active,
             lifetime,
             created_at: Instant::now(),
             bytes_processed: 0,
+            rekey_initiated_at: None,
         }
     }
 
@@ -288,6 +323,140 @@ impl ChildSa {
     /// Record bytes processed (for byte-based lifetime)
     pub fn add_bytes(&mut self, bytes: u64) {
         self.bytes_processed = self.bytes_processed.saturating_add(bytes);
+    }
+
+    /// Check if SA can be used for traffic
+    ///
+    /// Returns true if SA is in Active or Rekeying state.
+    /// Returns false if SA is Rekeyed, Expired, or Deleted.
+    pub fn can_use(&self) -> bool {
+        matches!(self.state, ChildSaState::Active | ChildSaState::Rekeying)
+    }
+
+    /// Initiate rekeying process
+    ///
+    /// Transitions SA from Active to Rekeying state.
+    /// Records the timestamp when rekeying was initiated.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if SA is not in Active state.
+    pub fn initiate_rekey(&mut self) -> Result<()> {
+        if self.state != ChildSaState::Active {
+            return Err(Error::InvalidState(format!(
+                "Cannot initiate rekey from state {:?}",
+                self.state
+            )));
+        }
+
+        self.state = ChildSaState::Rekeying;
+        self.rekey_initiated_at = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Mark SA as rekeyed (new SA is now active)
+    ///
+    /// Transitions SA from Rekeying to Rekeyed state.
+    /// The SA can still be used for a brief period to handle in-flight packets,
+    /// but new traffic should use the new SA.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if SA is not in Rekeying state.
+    pub fn mark_rekeyed(&mut self) -> Result<()> {
+        if self.state != ChildSaState::Rekeying {
+            return Err(Error::InvalidState(format!(
+                "Cannot mark as rekeyed from state {:?}",
+                self.state
+            )));
+        }
+
+        self.state = ChildSaState::Rekeyed;
+        Ok(())
+    }
+
+    /// Mark SA as expired (hard lifetime exceeded)
+    ///
+    /// Can be called from any state except Deleted.
+    /// SA must be deleted immediately.
+    pub fn mark_expired(&mut self) -> Result<()> {
+        if self.state == ChildSaState::Deleted {
+            return Err(Error::InvalidState(
+                "Cannot mark deleted SA as expired".into(),
+            ));
+        }
+
+        self.state = ChildSaState::Expired;
+        Ok(())
+    }
+
+    /// Mark SA as deleted
+    ///
+    /// Can be called from Rekeyed or Expired state.
+    /// This is the terminal state.
+    pub fn mark_deleted(&mut self) -> Result<()> {
+        if !matches!(
+            self.state,
+            ChildSaState::Rekeyed | ChildSaState::Expired
+        ) {
+            return Err(Error::InvalidState(format!(
+                "Cannot delete SA from state {:?}",
+                self.state
+            )));
+        }
+
+        self.state = ChildSaState::Deleted;
+        Ok(())
+    }
+
+    /// Check if SA should be deleted
+    ///
+    /// Returns true if:
+    /// - SA is in Expired state (hard lifetime exceeded), OR
+    /// - SA is in Rekeyed state and grace period has passed
+    ///
+    /// Grace period for Rekeyed SAs is 30 seconds after rekeying completed,
+    /// allowing in-flight packets to be processed.
+    pub fn should_delete(&self) -> bool {
+        match self.state {
+            ChildSaState::Expired => true,
+            ChildSaState::Rekeyed => {
+                // Wait for grace period before deleting rekeyed SA
+                const REKEY_GRACE_PERIOD: Duration = Duration::from_secs(30);
+
+                if let Some(rekey_time) = self.rekey_initiated_at {
+                    Instant::now().duration_since(rekey_time) >= REKEY_GRACE_PERIOD
+                } else {
+                    // No rekey timestamp, delete immediately
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Get time remaining before soft lifetime expires
+    ///
+    /// Returns None if already expired or no time-based lifetime configured.
+    pub fn time_until_rekey(&self) -> Option<Duration> {
+        let age = self.age();
+        if age >= self.lifetime.soft_time {
+            None
+        } else {
+            Some(self.lifetime.soft_time - age)
+        }
+    }
+
+    /// Get time remaining before hard lifetime expires
+    ///
+    /// Returns None if already expired or no time-based lifetime configured.
+    pub fn time_until_expiry(&self) -> Option<Duration> {
+        let age = self.age();
+        if age >= self.lifetime.hard_time {
+            None
+        } else {
+            Some(self.lifetime.hard_time - age)
+        }
     }
 }
 
@@ -619,5 +788,593 @@ mod tests {
         // Keys should be different with/without PFS
         assert_ne!(sk_ei_pfs, sk_ei_no_pfs);
         assert_ne!(sk_er_pfs, sk_er_no_pfs);
+    }
+
+    // ========================================
+    // Rekeying Tests (Stage 5)
+    // ========================================
+
+    #[test]
+    fn test_child_sa_state_default() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // New Child SA should be in Active state
+        assert_eq!(child_sa.state, ChildSaState::Active);
+        assert!(child_sa.rekey_initiated_at.is_none());
+    }
+
+    #[test]
+    fn test_child_sa_can_use_active() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Active SA can be used
+        assert!(child_sa.can_use());
+    }
+
+    #[test]
+    fn test_child_sa_can_use_rekeying() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Initiate rekey
+        child_sa.initiate_rekey().unwrap();
+
+        // Rekeying SA can still be used
+        assert!(child_sa.can_use());
+    }
+
+    #[test]
+    fn test_child_sa_cannot_use_rekeyed() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Transition to Rekeyed state
+        child_sa.initiate_rekey().unwrap();
+        child_sa.mark_rekeyed().unwrap();
+
+        // Rekeyed SA cannot be used
+        assert!(!child_sa.can_use());
+    }
+
+    #[test]
+    fn test_child_sa_cannot_use_expired() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Mark as expired
+        child_sa.mark_expired().unwrap();
+
+        // Expired SA cannot be used
+        assert!(!child_sa.can_use());
+    }
+
+    #[test]
+    fn test_initiate_rekey_from_active() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Should successfully initiate rekey
+        assert!(child_sa.initiate_rekey().is_ok());
+        assert_eq!(child_sa.state, ChildSaState::Rekeying);
+        assert!(child_sa.rekey_initiated_at.is_some());
+    }
+
+    #[test]
+    fn test_initiate_rekey_from_invalid_state() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Transition to Rekeying state
+        child_sa.initiate_rekey().unwrap();
+
+        // Cannot initiate rekey again from Rekeying state
+        let result = child_sa.initiate_rekey();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mark_rekeyed_from_rekeying() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Initiate rekey first
+        child_sa.initiate_rekey().unwrap();
+
+        // Should successfully mark as rekeyed
+        assert!(child_sa.mark_rekeyed().is_ok());
+        assert_eq!(child_sa.state, ChildSaState::Rekeyed);
+    }
+
+    #[test]
+    fn test_mark_rekeyed_from_invalid_state() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Cannot mark as rekeyed from Active state
+        let result = child_sa.mark_rekeyed();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_mark_expired_from_any_state() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Can mark as expired from Active state
+        assert!(child_sa.mark_expired().is_ok());
+        assert_eq!(child_sa.state, ChildSaState::Expired);
+    }
+
+    #[test]
+    fn test_mark_deleted_from_rekeyed() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Transition to Rekeyed state
+        child_sa.initiate_rekey().unwrap();
+        child_sa.mark_rekeyed().unwrap();
+
+        // Should successfully mark as deleted
+        assert!(child_sa.mark_deleted().is_ok());
+        assert_eq!(child_sa.state, ChildSaState::Deleted);
+    }
+
+    #[test]
+    fn test_mark_deleted_from_expired() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Transition to Expired state
+        child_sa.mark_expired().unwrap();
+
+        // Should successfully mark as deleted
+        assert!(child_sa.mark_deleted().is_ok());
+        assert_eq!(child_sa.state, ChildSaState::Deleted);
+    }
+
+    #[test]
+    fn test_mark_deleted_from_invalid_state() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Cannot mark as deleted from Active state
+        let result = child_sa.mark_deleted();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_should_delete_expired() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Mark as expired
+        child_sa.mark_expired().unwrap();
+
+        // Should be deleted immediately
+        assert!(child_sa.should_delete());
+    }
+
+    #[test]
+    fn test_should_delete_rekeyed_grace_period() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Transition to Rekeyed state
+        child_sa.initiate_rekey().unwrap();
+        child_sa.mark_rekeyed().unwrap();
+
+        // Should not delete immediately (within grace period)
+        assert!(!child_sa.should_delete());
+    }
+
+    #[test]
+    fn test_should_not_delete_active() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Active SA should not be deleted
+        assert!(!child_sa.should_delete());
+    }
+
+    #[test]
+    fn test_time_until_rekey_active() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+
+        // Short lifetime for testing
+        let lifetime = SaLifetime::new(
+            Duration::from_secs(10),
+            Duration::from_secs(20),
+        ).unwrap();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Should have time until rekey
+        let time_until = child_sa.time_until_rekey();
+        assert!(time_until.is_some());
+        assert!(time_until.unwrap() <= Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_time_until_rekey_rekeying() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+        let lifetime = SaLifetime::default();
+
+        let mut child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Initiate rekey
+        child_sa.initiate_rekey().unwrap();
+
+        // time_until_rekey() is time-based, not state-based
+        // It should still return time remaining even when rekeying
+        let time_until = child_sa.time_until_rekey();
+        assert!(time_until.is_some());
+        assert!(time_until.unwrap() <= Duration::from_secs(45 * 60));
+    }
+
+    #[test]
+    fn test_time_until_expiry_active() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+
+        // Short lifetime for testing
+        let lifetime = SaLifetime::new(
+            Duration::from_secs(10),
+            Duration::from_secs(20),
+        ).unwrap();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Should have time until expiry
+        let time_until = child_sa.time_until_expiry();
+        assert!(time_until.is_some());
+        assert!(time_until.unwrap() <= Duration::from_secs(20));
+    }
+
+    #[test]
+    fn test_time_until_expiry_after_hard_lifetime() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+
+        // Very short hard lifetime (1ms)
+        let lifetime = SaLifetime::new(
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+        ).unwrap();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Wait for hard lifetime to expire
+        std::thread::sleep(Duration::from_millis(5));
+
+        // time_until_expiry() should return None after hard lifetime expires
+        assert!(child_sa.time_until_expiry().is_none());
+    }
+
+    #[test]
+    fn test_lifetime_expiration_detection() {
+        let spi = 0x12345678;
+        let sk_e = vec![0u8; 16];
+        let ts_i = create_test_traffic_selectors();
+        let ts_r = create_test_traffic_selectors();
+        let proposal = create_test_proposal();
+
+        // Very short lifetime (1ms soft, 2ms hard)
+        let lifetime = SaLifetime::new(
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+        ).unwrap();
+
+        let child_sa = ChildSa::new(
+            spi,
+            false,
+            sk_e,
+            None,
+            ts_i,
+            ts_r,
+            proposal,
+            lifetime,
+        );
+
+        // Wait for soft lifetime to expire
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Time until rekey should be None or zero
+        let time_until_rekey = child_sa.time_until_rekey();
+        assert!(
+            time_until_rekey.is_none() || time_until_rekey.unwrap() == Duration::ZERO,
+            "Expected None or zero duration after soft lifetime expires"
+        );
     }
 }
