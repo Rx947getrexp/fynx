@@ -29,6 +29,9 @@ pub enum Error {
     /// No acceptable proposal found
     NoProposalChosen,
 
+    /// Invalid proposal
+    InvalidProposal(String),
+
     /// Authentication failed
     AuthenticationFailed(String),
 
@@ -128,6 +131,9 @@ impl fmt::Display for Error {
             }
             Error::NoProposalChosen => {
                 write!(f, "No acceptable proposal found in negotiation")
+            }
+            Error::InvalidProposal(msg) => {
+                write!(f, "Invalid proposal: {}", msg)
             }
             Error::AuthenticationFailed(msg) => {
                 write!(f, "Authentication failed: {}", msg)
