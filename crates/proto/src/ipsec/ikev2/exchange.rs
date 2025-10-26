@@ -112,6 +112,18 @@ pub struct IkeSaContext {
 
     /// SK_pr - Responder's SK_p key (for PSK auth)
     pub sk_pr: Option<Vec<u8>>,
+
+    /// Lifetime configuration for IKE SA
+    pub lifetime: crate::ipsec::child_sa::SaLifetime,
+
+    /// Creation timestamp (for lifetime tracking)
+    pub created_at: std::time::Instant,
+
+    /// Timestamp when rekeying was initiated (None if not rekeying)
+    pub rekey_initiated_at: Option<std::time::Instant>,
+
+    /// Child SAs managed by this IKE SA
+    pub child_sas: Vec<crate::ipsec::child_sa::ChildSa>,
 }
 
 impl IkeSaContext {
@@ -136,6 +148,10 @@ impl IkeSaContext {
             sk_er: None,
             sk_pi: None,
             sk_pr: None,
+            lifetime: crate::ipsec::child_sa::SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            rekey_initiated_at: None,
+            child_sas: Vec::new(),
         }
     }
 
@@ -160,6 +176,10 @@ impl IkeSaContext {
             sk_er: None,
             sk_pi: None,
             sk_pr: None,
+            lifetime: crate::ipsec::child_sa::SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            rekey_initiated_at: None,
+            child_sas: Vec::new(),
         }
     }
 
@@ -319,6 +339,99 @@ impl IkeSaContext {
         } else {
             self.sk_pr.as_deref()
         }
+    }
+
+    /// Get IKE SA age since creation
+    pub fn age(&self) -> std::time::Duration {
+        self.created_at.elapsed()
+    }
+
+    /// Check if IKE SA should be rekeyed
+    ///
+    /// Returns true if soft lifetime has been exceeded
+    pub fn should_rekey(&self) -> bool {
+        self.lifetime.is_soft_expired(self.age(), 0)
+    }
+
+    /// Check if IKE SA has expired
+    ///
+    /// Returns true if hard lifetime has been exceeded
+    pub fn is_expired(&self) -> bool {
+        self.lifetime.is_hard_expired(self.age(), 0)
+    }
+
+    /// Initiate IKE SA rekey
+    ///
+    /// Transitions state from Established to Rekeying
+    ///
+    /// # Errors
+    ///
+    /// Returns error if not in Established state
+    pub fn initiate_rekey(&mut self) -> Result<()> {
+        if self.state != IkeState::Established {
+            return Err(Error::InvalidState(format!(
+                "Cannot initiate rekey from state {:?}",
+                self.state
+            )));
+        }
+
+        self.transition_to(IkeState::Rekeying)?;
+        self.rekey_initiated_at = Some(std::time::Instant::now());
+        Ok(())
+    }
+
+    /// Mark IKE SA as rekeyed
+    ///
+    /// Transitions from Rekeying back to Established (for new SA)
+    /// or to Deleting (for old SA)
+    pub fn mark_rekeyed(&mut self) -> Result<()> {
+        if self.state != IkeState::Rekeying {
+            return Err(Error::InvalidState(format!(
+                "Cannot mark rekeyed from state {:?}",
+                self.state
+            )));
+        }
+
+        self.transition_to(IkeState::Deleting)?;
+        Ok(())
+    }
+
+    /// Transfer Child SAs to new IKE SA
+    ///
+    /// Moves all Child SAs from this IKE SA to the new one
+    ///
+    /// # Arguments
+    ///
+    /// * `new_ike_sa` - The new IKE SA to transfer Child SAs to
+    ///
+    /// # Returns
+    ///
+    /// Returns the number of Child SAs transferred
+    pub fn transfer_child_sas(&mut self, new_ike_sa: &mut IkeSaContext) -> usize {
+        let count = self.child_sas.len();
+        new_ike_sa.child_sas.append(&mut self.child_sas);
+        count
+    }
+
+    /// Add a Child SA to this IKE SA
+    pub fn add_child_sa(&mut self, child_sa: crate::ipsec::child_sa::ChildSa) {
+        self.child_sas.push(child_sa);
+    }
+
+    /// Remove a Child SA by SPI
+    ///
+    /// Returns the removed Child SA if found
+    pub fn remove_child_sa(&mut self, spi: u32) -> Option<crate::ipsec::child_sa::ChildSa> {
+        if let Some(index) = self.child_sas.iter().position(|sa| sa.spi == spi) {
+            Some(self.child_sas.remove(index))
+        } else {
+            None
+        }
+    }
+
+    /// Get number of active Child SAs
+    pub fn child_sa_count(&self) -> usize {
+        self.child_sas.len()
     }
 }
 
@@ -693,6 +806,8 @@ impl IkeAuthExchange {
                 IkePayload::IDi(id) | IkePayload::IDr(id) => id.to_payload_data(),
                 IkePayload::AUTH(auth) => auth.to_payload_data(),
                 IkePayload::TSi(ts) | IkePayload::TSr(ts) => ts.to_payload_data(),
+                IkePayload::Nonce(nonce) => nonce.to_payload_data(),
+                IkePayload::KE(ke) => ke.to_payload_data(),
                 _ => {
                     return Err(Error::Internal(
                         "Unsupported payload type for encryption".into(),
@@ -2267,11 +2382,347 @@ impl CreateChildSaExchange {
             sk_ar,
         ))
     }
+
+    /// Create CREATE_CHILD_SA request for IKE SA rekeying
+    ///
+    /// Builds a CREATE_CHILD_SA request to rekey the IKE SA itself (not a Child SA).
+    /// This creates a new IKE SA with fresh keying material while the old one remains
+    /// active during the transition period.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Current IKE SA context (must be Established or Rekeying)
+    /// * `ike_proposals` - IKE SA proposals for the new IKE SA
+    /// * `dh_public_key` - New DH public key for the rekey
+    ///
+    /// # Returns
+    ///
+    /// Returns the CREATE_CHILD_SA request message and the generated nonce
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidState` if IKE SA is not in correct state
+    pub fn create_ike_rekey_request(
+        context: &mut IkeSaContext,
+        ike_proposals: &[Proposal],
+        dh_public_key: Vec<u8>,
+    ) -> Result<(IkeMessage, Vec<u8>)> {
+        use super::constants::{ExchangeType, IkeFlags, PayloadType};
+        use super::message::{IkeHeader, IkeMessage};
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+
+        // Validate state - must be Established or Rekeying
+        if !matches!(context.state, IkeState::Established | IkeState::Rekeying) {
+            return Err(Error::InvalidState(format!(
+                "Cannot create IKE rekey request in state {:?}",
+                context.state
+            )));
+        }
+
+        // Generate nonce
+        use rand::RngCore;
+        let mut nonce = vec![0u8; 32];
+        rand::thread_rng().fill_bytes(&mut nonce[..]);
+
+        // Create SA payload with IKE proposals
+        let sa_payload = super::payload::SaPayload {
+            proposals: ike_proposals.to_vec(),
+        };
+
+        // Create Nonce payload
+        let nonce_payload = super::payload::NoncePayload::new(nonce.clone())?;
+
+        // Create KE payload
+        let dh_group = ike_proposals
+            .first()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Dh) {
+                        Some(t.transform_id)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(14); // Default to Group 14
+
+        let ke_payload = super::payload::KePayload::new(dh_group, dh_public_key);
+
+        // Build inner payloads: SA, Nonce, KE
+        // NOTE: For IKE SA rekey, we do NOT include TSi/TSr payloads
+        let inner_payloads = vec![
+            IkePayload::SA(sa_payload),
+            IkePayload::Nonce(nonce_payload),
+            IkePayload::KE(ke_payload),
+        ];
+
+        // Create IKE header
+        let message_id = context.next_message_id();
+        let flags = IkeFlags::request(context.is_initiator);
+
+        let header = IkeHeader::new(
+            context.initiator_spi,
+            context.responder_spi,
+            PayloadType::SK,
+            ExchangeType::CreateChildSa,
+            flags,
+            message_id,
+            0, // Length will be computed during serialization
+        );
+
+        // Get cipher for encryption
+        let cipher = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Encr) {
+                        match t.transform_id {
+                            20 => Some(CipherAlgorithm::AesGcm128),
+                            19 => Some(CipherAlgorithm::AesGcm256),
+                            28 => Some(CipherAlgorithm::ChaCha20Poly1305),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = header.to_bytes();
+
+        // Encrypt inner payloads
+        let sk_payload =
+            IkeAuthExchange::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+
+        // Build final message
+        let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
+
+        Ok((message, nonce))
+    }
+
+    /// Process CREATE_CHILD_SA request for IKE SA rekeying (responder)
+    ///
+    /// Handles an incoming CREATE_CHILD_SA request that's rekeying the IKE SA.
+    /// Detects IKE SA rekey by the absence of TSi/TSr payloads.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context
+    /// * `message` - CREATE_CHILD_SA request message
+    ///
+    /// # Returns
+    ///
+    /// Returns tuple of (selected_proposal, nonce_i, ke_i) for building the response
+    ///
+    /// # Errors
+    ///
+    /// - `InvalidState` if IKE SA not established
+    /// - `MissingPayload` if required payloads missing
+    pub fn process_ike_rekey_request(
+        context: &IkeSaContext,
+        message: &IkeMessage,
+    ) -> Result<(Proposal, Vec<u8>, super::payload::KePayload)> {
+        use super::constants::PayloadType;
+
+        // Validate state
+        if !context.state.is_established() {
+            return Err(Error::InvalidState(
+                "IKE SA must be established to process rekey request".into(),
+            ));
+        }
+
+        // Get cipher for decryption
+        let cipher = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Encr) {
+                        match t.transform_id {
+                            20 => Some(crate::ipsec::crypto::cipher::CipherAlgorithm::AesGcm128),
+                            19 => Some(crate::ipsec::crypto::cipher::CipherAlgorithm::AesGcm256),
+                            28 => Some(
+                                crate::ipsec::crypto::cipher::CipherAlgorithm::ChaCha20Poly1305,
+                            ),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(crate::ipsec::crypto::cipher::CipherAlgorithm::AesGcm128);
+
+        // Find SK payload
+        let sk_payload = message
+            .payloads
+            .iter()
+            .find_map(|p| match p {
+                IkePayload::SK(sk) => Some(sk),
+                _ => None,
+            })
+            .ok_or_else(|| Error::MissingPayload("SK payload".into()))?;
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = message.header.to_bytes();
+
+        // Decrypt payloads
+        let inner_payloads = IkeAuthExchange::decrypt_payloads(
+            context,
+            &ike_header_bytes,
+            sk_payload,
+            cipher,
+            PayloadType::SA,
+        )?;
+
+        // Extract payloads
+        let mut sa_payload = None;
+        let mut nonce_i = None;
+        let mut ke_i = None;
+
+        for payload in &inner_payloads {
+            match payload {
+                IkePayload::SA(sa) => sa_payload = Some(sa.clone()),
+                IkePayload::Nonce(nonce) => nonce_i = Some(nonce.nonce.clone()),
+                IkePayload::KE(ke) => ke_i = Some(ke.clone()),
+                IkePayload::TSi(_) | IkePayload::TSr(_) => {
+                    // If we see traffic selectors, this is Child SA creation, not IKE rekey
+                    return Err(Error::InvalidMessage(
+                        "IKE SA rekey request should not contain traffic selectors".into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        // Validate required payloads
+        let sa_payload = sa_payload.ok_or_else(|| Error::MissingPayload("SA payload".into()))?;
+        let nonce_i = nonce_i.ok_or_else(|| Error::MissingPayload("Nonce payload".into()))?;
+        let ke_i = ke_i.ok_or_else(|| Error::MissingPayload("KE payload".into()))?;
+
+        // Select proposal from offered proposals
+        let selected_proposal = sa_payload
+            .proposals
+            .first()
+            .ok_or_else(|| Error::InvalidMessage("No proposals offered".into()))?
+            .clone();
+
+        Ok((selected_proposal, nonce_i, ke_i))
+    }
+
+    /// Create CREATE_CHILD_SA response for IKE SA rekeying
+    ///
+    /// Builds the response to an IKE SA rekey request.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - IKE SA context
+    /// * `request_header` - Header from the request message
+    /// * `selected_proposal` - Selected IKE SA proposal
+    /// * `dh_public_key` - Responder's DH public key
+    ///
+    /// # Returns
+    ///
+    /// Returns the CREATE_CHILD_SA response message and generated nonce
+    pub fn create_ike_rekey_response(
+        context: &IkeSaContext,
+        request_header: &IkeHeader,
+        selected_proposal: &Proposal,
+        dh_public_key: Vec<u8>,
+    ) -> Result<(IkeMessage, Vec<u8>)> {
+        use super::constants::{ExchangeType, IkeFlags, PayloadType};
+        use super::message::{IkeHeader, IkeMessage};
+        use crate::ipsec::crypto::cipher::CipherAlgorithm;
+        use rand::RngCore;
+
+        // Generate nonce
+        let mut nonce = vec![0u8; 32];
+        rand::thread_rng().fill_bytes(&mut nonce[..]);
+
+        // Create SA payload with selected proposal
+        let sa_payload = super::payload::SaPayload {
+            proposals: vec![selected_proposal.clone()],
+        };
+
+        // Create Nonce payload
+        let nonce_payload = super::payload::NoncePayload::new(nonce.clone())?;
+
+        // Create KE payload
+        let dh_group = selected_proposal
+            .transforms
+            .iter()
+            .find_map(|t| {
+                if matches!(t.transform_type, super::proposal::TransformType::Dh) {
+                    Some(t.transform_id)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(14);
+
+        let ke_payload = super::payload::KePayload::new(dh_group, dh_public_key);
+
+        // Build inner payloads: SA, Nonce, KE (no TSi/TSr for IKE SA rekey)
+        let inner_payloads = vec![
+            IkePayload::SA(sa_payload),
+            IkePayload::Nonce(nonce_payload),
+            IkePayload::KE(ke_payload),
+        ];
+
+        // Create response header (same message ID as request)
+        let flags = IkeFlags::response(context.is_initiator);
+
+        let header = IkeHeader::new(
+            context.initiator_spi,
+            context.responder_spi,
+            PayloadType::SK,
+            ExchangeType::CreateChildSa,
+            flags,
+            request_header.message_id,
+            0,
+        );
+
+        // Get cipher for encryption
+        let cipher = context
+            .selected_proposal
+            .as_ref()
+            .and_then(|p| {
+                p.transforms.iter().find_map(|t| {
+                    if matches!(t.transform_type, super::proposal::TransformType::Encr) {
+                        match t.transform_id {
+                            20 => Some(CipherAlgorithm::AesGcm128),
+                            19 => Some(CipherAlgorithm::AesGcm256),
+                            28 => Some(CipherAlgorithm::ChaCha20Poly1305),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(CipherAlgorithm::AesGcm128);
+
+        // Serialize IKE header for AAD
+        let ike_header_bytes = header.to_bytes();
+
+        // Encrypt inner payloads
+        let sk_payload =
+            IkeAuthExchange::encrypt_payloads(context, &ike_header_bytes, &inner_payloads, cipher)?;
+
+        // Build final message
+        let message = IkeMessage::new(header, vec![IkePayload::SK(sk_payload)]);
+
+        Ok((message, nonce))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipsec::ikev2::payload::TrafficSelectorsPayload;
     use crate::ipsec::ikev2::proposal::{
         DhTransformId, EncrTransformId, IntegTransformId, PrfTransformId, ProtocolId, Transform,
     };
@@ -2995,5 +3446,284 @@ mod tests {
 
         assert_eq!(auth_resp.payloads.len(), 1);
         assert!(matches!(auth_resp.payloads[0], IkePayload::SK(_)));
+    }
+
+    // ========== IKE SA Rekeying Tests (Phase 4 Stage 3) ==========
+
+    #[test]
+    fn test_ike_sa_age() {
+        let ctx = IkeSaContext::new_initiator([0x11; 8]);
+
+        // Age should be very small (just created)
+        let age = ctx.age();
+        assert!(age.as_millis() < 100);
+    }
+
+    #[test]
+    fn test_ike_sa_should_rekey_not_expired() {
+        let ctx = IkeSaContext::new_initiator([0x11; 8]);
+
+        // Should not need rekey immediately after creation
+        assert!(!ctx.should_rekey());
+        assert!(!ctx.is_expired());
+    }
+
+    #[test]
+    fn test_ike_sa_should_rekey_soft_expired() {
+        use std::time::Duration;
+
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+
+        // Set very short lifetime
+        ctx.lifetime = crate::ipsec::child_sa::SaLifetime::new(
+            Duration::from_millis(1), // soft: 1ms
+            Duration::from_secs(60),  // hard: 60s
+        )
+        .unwrap();
+
+        // Wait for soft limit to pass
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Should need rekey but not expired
+        assert!(ctx.should_rekey());
+        assert!(!ctx.is_expired());
+    }
+
+    #[test]
+    fn test_ike_sa_initiate_rekey() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Established;
+
+        // Initiate rekey
+        ctx.initiate_rekey().expect("Failed to initiate rekey");
+
+        // Should be in Rekeying state
+        assert_eq!(ctx.state, IkeState::Rekeying);
+        assert!(ctx.rekey_initiated_at.is_some());
+    }
+
+    #[test]
+    fn test_ike_sa_initiate_rekey_invalid_state() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Idle;
+
+        // Cannot initiate rekey from Idle state
+        let result = ctx.initiate_rekey();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ike_sa_mark_rekeyed() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Rekeying;
+
+        // Mark as rekeyed
+        ctx.mark_rekeyed().expect("Failed to mark rekeyed");
+
+        // Should transition to Deleting
+        assert_eq!(ctx.state, IkeState::Deleting);
+    }
+
+    #[test]
+    fn test_ike_sa_mark_rekeyed_invalid_state() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Established;
+
+        // Cannot mark rekeyed from Established state
+        let result = ctx.mark_rekeyed();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ike_sa_child_sa_management() {
+        use crate::ipsec::child_sa::ChildSa;
+        use crate::ipsec::replay::ReplayWindow;
+
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+
+        // Initially no child SAs
+        assert_eq!(ctx.child_sa_count(), 0);
+
+        // Create mock Child SA
+        let child_sa = ChildSa {
+            spi: 0x12345678,
+            protocol: 50,
+            is_inbound: true,
+            sk_e: vec![0u8; 16],
+            sk_a: None,
+            ts_i: TrafficSelectorsPayload { selectors: vec![] },
+            ts_r: TrafficSelectorsPayload { selectors: vec![] },
+            proposal: create_child_proposal(),
+            seq_out: 0,
+            replay_window: Some(ReplayWindow::new(64)),
+            state: crate::ipsec::child_sa::ChildSaState::Active,
+            lifetime: crate::ipsec::child_sa::SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+            rekey_initiated_at: None,
+        };
+
+        // Add Child SA
+        ctx.add_child_sa(child_sa);
+        assert_eq!(ctx.child_sa_count(), 1);
+
+        // Remove Child SA
+        let removed = ctx.remove_child_sa(0x12345678);
+        assert!(removed.is_some());
+        assert_eq!(ctx.child_sa_count(), 0);
+
+        // Try to remove non-existent SA
+        let removed = ctx.remove_child_sa(0x99999999);
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_ike_sa_transfer_child_sas() {
+        use crate::ipsec::child_sa::ChildSa;
+        use crate::ipsec::replay::ReplayWindow;
+
+        let mut old_ike_sa = IkeSaContext::new_initiator([0x11; 8]);
+        let mut new_ike_sa = IkeSaContext::new_initiator([0x22; 8]);
+
+        // Add 3 Child SAs to old IKE SA
+        for i in 0..3 {
+            let child_sa = ChildSa {
+                spi: 0x10000000 + i,
+                protocol: 50,
+                is_inbound: true,
+                sk_e: vec![0u8; 16],
+                sk_a: None,
+                ts_i: TrafficSelectorsPayload { selectors: vec![] },
+                ts_r: TrafficSelectorsPayload { selectors: vec![] },
+                proposal: create_child_proposal(),
+                seq_out: 0,
+                replay_window: Some(ReplayWindow::new(64)),
+                state: crate::ipsec::child_sa::ChildSaState::Active,
+                lifetime: crate::ipsec::child_sa::SaLifetime::default(),
+                created_at: std::time::Instant::now(),
+                bytes_processed: 0,
+                rekey_initiated_at: None,
+            };
+            old_ike_sa.add_child_sa(child_sa);
+        }
+
+        assert_eq!(old_ike_sa.child_sa_count(), 3);
+        assert_eq!(new_ike_sa.child_sa_count(), 0);
+
+        // Transfer all Child SAs
+        let count = old_ike_sa.transfer_child_sas(&mut new_ike_sa);
+
+        assert_eq!(count, 3);
+        assert_eq!(old_ike_sa.child_sa_count(), 0);
+        assert_eq!(new_ike_sa.child_sa_count(), 3);
+    }
+
+    #[test]
+    fn test_create_ike_rekey_request() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Established;
+        ctx.responder_spi = [0x22; 8];
+
+        // Set up required crypto material
+        ctx.selected_proposal = Some(create_test_proposal());
+        ctx.sk_ei = Some(vec![0u8; 16]);
+        ctx.sk_er = Some(vec![0u8; 16]);
+
+        // Create IKE proposals for rekey
+        let ike_proposals = vec![create_test_proposal()];
+        let dh_public = vec![0xAB; 256];
+
+        // Create rekey request
+        let result =
+            CreateChildSaExchange::create_ike_rekey_request(&mut ctx, &ike_proposals, dh_public);
+
+        if let Err(e) = &result {
+            panic!("create_ike_rekey_request failed: {:?}", e);
+        }
+        let (message, nonce) = result.unwrap();
+
+        // Verify message structure
+        assert_eq!(message.header.exchange_type, ExchangeType::CreateChildSa);
+        assert!(message.header.flags.is_initiator());
+        assert!(!message.header.flags.is_response());
+
+        // Verify SK payload present
+        assert_eq!(message.payloads.len(), 1);
+        assert!(matches!(message.payloads[0], IkePayload::SK(_)));
+
+        // Verify nonce generated
+        assert_eq!(nonce.len(), 32);
+    }
+
+    #[test]
+    fn test_create_ike_rekey_request_invalid_state() {
+        let mut ctx = IkeSaContext::new_initiator([0x11; 8]);
+        ctx.state = IkeState::Idle;
+
+        let ike_proposals = vec![create_test_proposal()];
+        let dh_public = vec![0xAB; 256];
+
+        // Should fail from Idle state
+        let result =
+            CreateChildSaExchange::create_ike_rekey_request(&mut ctx, &ike_proposals, dh_public);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_ike_rekey_response() {
+        let mut ctx = IkeSaContext::new_responder([0x11; 8], [0x22; 8]);
+        ctx.state = IkeState::Established;
+
+        // Set up required crypto material
+        ctx.selected_proposal = Some(create_test_proposal());
+        ctx.sk_ei = Some(vec![0u8; 16]);
+        ctx.sk_er = Some(vec![0u8; 16]);
+
+        let request_header = IkeHeader::new(
+            [0x11; 8],
+            [0x22; 8],
+            PayloadType::SK,
+            ExchangeType::CreateChildSa,
+            IkeFlags::request(true),
+            5,
+            0,
+        );
+
+        let selected_proposal = create_test_proposal();
+        let dh_public = vec![0xCD; 256];
+
+        // Create rekey response
+        let result = CreateChildSaExchange::create_ike_rekey_response(
+            &ctx,
+            &request_header,
+            &selected_proposal,
+            dh_public,
+        );
+
+        if let Err(e) = &result {
+            panic!("create_ike_rekey_response failed: {:?}", e);
+        }
+        let (message, nonce) = result.unwrap();
+
+        // Verify message structure
+        assert_eq!(message.header.exchange_type, ExchangeType::CreateChildSa);
+        assert!(message.header.flags.is_response()); // This is a response message
+
+        // Message ID should match request
+        assert_eq!(message.header.message_id, 5);
+
+        // Verify SK payload present
+        assert_eq!(message.payloads.len(), 1);
+        assert!(matches!(message.payloads[0], IkePayload::SK(_)));
+
+        // Verify nonce generated
+        assert_eq!(nonce.len(), 32);
+    }
+
+    fn create_child_proposal() -> Proposal {
+        Proposal::new(1, ProtocolId::Esp)
+            .add_transform(Transform::encr(EncrTransformId::AesGcm128))
+            .add_transform(Transform::dh(DhTransformId::Group14))
     }
 }
