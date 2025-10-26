@@ -39,6 +39,7 @@
 pub mod auth;
 pub mod constants;
 pub mod exchange;
+pub mod informational;
 pub mod message;
 pub mod payload;
 pub mod proposal;
@@ -47,6 +48,7 @@ pub mod state;
 pub use auth::*;
 pub use constants::*;
 pub use exchange::*;
+pub use informational::*;
 pub use message::*;
 pub use payload::*;
 pub use proposal::*;
