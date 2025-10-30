@@ -66,6 +66,7 @@
 
 pub mod child_sa;
 pub mod crypto;
+pub mod dpd;
 pub mod error;
 pub mod esp;
 pub mod ikev2;
