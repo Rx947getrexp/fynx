@@ -10,7 +10,6 @@
 //!         └── Transform(s)
 //! ```
 
-use super::constants::PayloadType;
 use crate::ipsec::{Error, Result};
 
 /// Transform Type (RFC 7296 Section 3.3.2)

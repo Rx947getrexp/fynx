@@ -203,6 +203,281 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// Error Recovery Action
+///
+/// Defines what action to take when an error occurs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecoveryAction {
+    /// Retry the operation with specified policy
+    Retry {
+        /// Maximum retry attempts
+        max_attempts: u32,
+        /// Base delay between retries
+        base_delay: std::time::Duration,
+    },
+
+    /// Send NOTIFY error to peer
+    NotifyPeer {
+        /// Notify message type
+        notify_type: u16,
+    },
+
+    /// Delete the Security Association
+    DeleteSa,
+
+    /// Reset connection (restart IKE_SA_INIT)
+    Reset,
+
+    /// Ignore the error (log and continue)
+    Ignore,
+
+    /// Fail immediately (propagate error)
+    Fail,
+}
+
+/// Retry Policy
+///
+/// Configures automatic retry behavior with exponential backoff.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use fynx_proto::ipsec::error::RetryPolicy;
+/// use std::time::Duration;
+///
+/// let policy = RetryPolicy::new(3, Duration::from_secs(1), 2.0, Duration::from_secs(60));
+///
+/// // Check if should retry
+/// assert!(policy.should_retry(0));
+/// assert!(policy.should_retry(1));
+/// assert!(policy.should_retry(2));
+/// assert!(!policy.should_retry(3)); // Max attempts reached
+///
+/// // Get retry delay (exponential backoff)
+/// assert_eq!(policy.get_delay(0), Duration::from_secs(1));  // 1s
+/// assert_eq!(policy.get_delay(1), Duration::from_secs(2));  // 2s
+/// assert_eq!(policy.get_delay(2), Duration::from_secs(4));  // 4s
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct RetryPolicy {
+    /// Maximum retry attempts (0 = no retries)
+    max_attempts: u32,
+
+    /// Base delay between retries
+    base_delay: std::time::Duration,
+
+    /// Exponential backoff multiplier
+    ///
+    /// Each retry delay = base_delay * (multiplier ^ attempt)
+    /// Typical values: 2.0 (exponential doubling)
+    backoff_multiplier: f32,
+
+    /// Maximum delay cap
+    ///
+    /// Prevents delays from growing too large
+    max_delay: std::time::Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        RetryPolicy {
+            max_attempts: 3,
+            base_delay: std::time::Duration::from_secs(1),
+            backoff_multiplier: 2.0,
+            max_delay: std::time::Duration::from_secs(60),
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Create new retry policy
+    ///
+    /// # Arguments
+    ///
+    /// * `max_attempts` - Maximum retry attempts
+    /// * `base_delay` - Initial delay between retries
+    /// * `backoff_multiplier` - Exponential backoff multiplier (e.g., 2.0)
+    /// * `max_delay` - Maximum delay cap
+    pub fn new(
+        max_attempts: u32,
+        base_delay: std::time::Duration,
+        backoff_multiplier: f32,
+        max_delay: std::time::Duration,
+    ) -> Self {
+        RetryPolicy {
+            max_attempts,
+            base_delay,
+            backoff_multiplier,
+            max_delay,
+        }
+    }
+
+    /// Create no-retry policy
+    pub fn no_retry() -> Self {
+        RetryPolicy {
+            max_attempts: 0,
+            base_delay: std::time::Duration::from_secs(0),
+            backoff_multiplier: 1.0,
+            max_delay: std::time::Duration::from_secs(0),
+        }
+    }
+
+    /// Check if should retry given attempt number
+    ///
+    /// # Arguments
+    ///
+    /// * `attempt` - Current attempt number (0-based)
+    ///
+    /// # Returns
+    ///
+    /// `true` if attempt < max_attempts
+    pub fn should_retry(&self, attempt: u32) -> bool {
+        attempt < self.max_attempts
+    }
+
+    /// Get retry delay for given attempt
+    ///
+    /// Uses exponential backoff: `delay = base_delay * (multiplier ^ attempt)`
+    ///
+    /// # Arguments
+    ///
+    /// * `attempt` - Current attempt number (0-based)
+    ///
+    /// # Returns
+    ///
+    /// Delay duration, capped at max_delay
+    pub fn get_delay(&self, attempt: u32) -> std::time::Duration {
+        if self.max_attempts == 0 {
+            return std::time::Duration::from_secs(0);
+        }
+
+        // Calculate exponential backoff: base * (multiplier ^ attempt)
+        let multiplier_pow = self.backoff_multiplier.powi(attempt as i32);
+        let delay_secs = self.base_delay.as_secs_f32() * multiplier_pow;
+
+        let delay = std::time::Duration::from_secs_f32(delay_secs);
+
+        // Cap at max_delay
+        if delay > self.max_delay {
+            self.max_delay
+        } else {
+            delay
+        }
+    }
+
+    /// Get maximum attempts
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Get base delay
+    pub fn base_delay(&self) -> std::time::Duration {
+        self.base_delay
+    }
+
+    /// Get backoff multiplier
+    pub fn backoff_multiplier(&self) -> f32 {
+        self.backoff_multiplier
+    }
+
+    /// Get maximum delay
+    pub fn max_delay(&self) -> std::time::Duration {
+        self.max_delay
+    }
+}
+
+/// Error Handler
+///
+/// Maps error types to recovery actions.
+#[derive(Debug, Clone)]
+pub struct ErrorHandler {
+    /// Default recovery action
+    default_action: RecoveryAction,
+
+    /// Default retry policy
+    default_retry: RetryPolicy,
+}
+
+impl Default for ErrorHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ErrorHandler {
+    /// Create new error handler with default policies
+    pub fn new() -> Self {
+        ErrorHandler {
+            default_action: RecoveryAction::Fail,
+            default_retry: RetryPolicy::default(),
+        }
+    }
+
+    /// Create error handler with custom default action
+    pub fn with_default_action(action: RecoveryAction) -> Self {
+        ErrorHandler {
+            default_action: action,
+            default_retry: RetryPolicy::default(),
+        }
+    }
+
+    /// Handle error and determine recovery action
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The error to handle
+    ///
+    /// # Returns
+    ///
+    /// Appropriate recovery action for the error type
+    pub fn handle_error(&self, error: &Error) -> RecoveryAction {
+        match error {
+            // Transient errors - retry
+            Error::Io(_) | Error::CryptoError(_) => RecoveryAction::Retry {
+                max_attempts: self.default_retry.max_attempts(),
+                base_delay: self.default_retry.base_delay(),
+            },
+
+            // Protocol errors - notify peer
+            Error::InvalidMessage(_)
+            | Error::InvalidPayload(_)
+            | Error::InvalidParameter(_)
+            | Error::UnsupportedVersion(_)
+            | Error::UnsupportedExchangeType(_) => RecoveryAction::NotifyPeer { notify_type: 7 }, // INVALID_SYNTAX
+
+            // Authentication errors - delete SA
+            Error::AuthenticationFailed(_) => RecoveryAction::DeleteSa,
+
+            // Replay attacks - ignore (already handled)
+            Error::ReplayDetected(_) => RecoveryAction::Ignore,
+
+            // State errors - depends on severity
+            Error::InvalidState(_) | Error::InvalidStateTransition { .. } => {
+                RecoveryAction::DeleteSa
+            }
+
+            // Missing SA - ignore (may be already deleted)
+            Error::SaNotFound(_) => RecoveryAction::Ignore,
+
+            // No proposal chosen - notify peer
+            Error::NoProposalChosen => RecoveryAction::NotifyPeer { notify_type: 14 }, // NO_PROPOSAL_CHOSEN
+
+            // All other errors - use default
+            _ => self.default_action.clone(),
+        }
+    }
+
+    /// Get default retry policy
+    pub fn default_retry_policy(&self) -> &RetryPolicy {
+        &self.default_retry
+    }
+
+    /// Set default retry policy
+    pub fn set_default_retry_policy(&mut self, policy: RetryPolicy) {
+        self.default_retry = policy;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +523,224 @@ mod tests {
         assert!(err.to_string().contains("Buffer too short"));
         assert!(err.to_string().contains("100"));
         assert!(err.to_string().contains("50"));
+    }
+
+    // Recovery Action tests
+
+    #[test]
+    fn test_recovery_action_retry() {
+        let action = RecoveryAction::Retry {
+            max_attempts: 3,
+            base_delay: std::time::Duration::from_secs(1),
+        };
+        assert!(matches!(action, RecoveryAction::Retry { .. }));
+    }
+
+    #[test]
+    fn test_recovery_action_notify_peer() {
+        let action = RecoveryAction::NotifyPeer { notify_type: 7 };
+        assert!(matches!(action, RecoveryAction::NotifyPeer { .. }));
+    }
+
+    // RetryPolicy tests
+
+    #[test]
+    fn test_retry_policy_default() {
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.max_attempts(), 3);
+        assert_eq!(policy.base_delay(), std::time::Duration::from_secs(1));
+        assert_eq!(policy.backoff_multiplier(), 2.0);
+        assert_eq!(policy.max_delay(), std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_retry_policy_new() {
+        let policy = RetryPolicy::new(
+            5,
+            std::time::Duration::from_secs(2),
+            1.5,
+            std::time::Duration::from_secs(30),
+        );
+        assert_eq!(policy.max_attempts(), 5);
+        assert_eq!(policy.base_delay(), std::time::Duration::from_secs(2));
+        assert_eq!(policy.backoff_multiplier(), 1.5);
+        assert_eq!(policy.max_delay(), std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_retry_policy_no_retry() {
+        let policy = RetryPolicy::no_retry();
+        assert_eq!(policy.max_attempts(), 0);
+        assert!(!policy.should_retry(0));
+    }
+
+    #[test]
+    fn test_retry_policy_should_retry() {
+        let policy = RetryPolicy::new(
+            3,
+            std::time::Duration::from_secs(1),
+            2.0,
+            std::time::Duration::from_secs(60),
+        );
+
+        assert!(policy.should_retry(0));
+        assert!(policy.should_retry(1));
+        assert!(policy.should_retry(2));
+        assert!(!policy.should_retry(3)); // Max attempts reached
+        assert!(!policy.should_retry(4));
+    }
+
+    #[test]
+    fn test_retry_policy_get_delay_exponential() {
+        let policy = RetryPolicy::new(
+            5,
+            std::time::Duration::from_secs(1),
+            2.0,
+            std::time::Duration::from_secs(100),
+        );
+
+        // Exponential backoff: 1, 2, 4, 8, 16 seconds
+        assert_eq!(policy.get_delay(0), std::time::Duration::from_secs(1));
+        assert_eq!(policy.get_delay(1), std::time::Duration::from_secs(2));
+        assert_eq!(policy.get_delay(2), std::time::Duration::from_secs(4));
+        assert_eq!(policy.get_delay(3), std::time::Duration::from_secs(8));
+        assert_eq!(policy.get_delay(4), std::time::Duration::from_secs(16));
+    }
+
+    #[test]
+    fn test_retry_policy_get_delay_capped() {
+        let policy = RetryPolicy::new(
+            10,
+            std::time::Duration::from_secs(1),
+            2.0,
+            std::time::Duration::from_secs(10),
+        );
+
+        // Should cap at max_delay (10 seconds)
+        assert_eq!(policy.get_delay(0), std::time::Duration::from_secs(1));
+        assert_eq!(policy.get_delay(1), std::time::Duration::from_secs(2));
+        assert_eq!(policy.get_delay(2), std::time::Duration::from_secs(4));
+        assert_eq!(policy.get_delay(3), std::time::Duration::from_secs(8));
+        assert_eq!(policy.get_delay(4), std::time::Duration::from_secs(10)); // Capped
+        assert_eq!(policy.get_delay(5), std::time::Duration::from_secs(10)); // Capped
+    }
+
+    #[test]
+    fn test_retry_policy_get_delay_no_retry() {
+        let policy = RetryPolicy::no_retry();
+        assert_eq!(policy.get_delay(0), std::time::Duration::from_secs(0));
+        assert_eq!(policy.get_delay(1), std::time::Duration::from_secs(0));
+    }
+
+    // ErrorHandler tests
+
+    #[test]
+    fn test_error_handler_new() {
+        let handler = ErrorHandler::new();
+        assert!(matches!(
+            handler.handle_error(&Error::Internal("test".into())),
+            RecoveryAction::Fail
+        ));
+    }
+
+    #[test]
+    fn test_error_handler_with_default_action() {
+        let handler = ErrorHandler::with_default_action(RecoveryAction::Ignore);
+        assert!(matches!(
+            handler.handle_error(&Error::Internal("test".into())),
+            RecoveryAction::Ignore
+        ));
+    }
+
+    #[test]
+    fn test_error_handler_transient_errors() {
+        let handler = ErrorHandler::new();
+
+        // I/O errors should retry
+        let action = handler.handle_error(&Error::Io("network error".into()));
+        assert!(matches!(action, RecoveryAction::Retry { .. }));
+
+        // Crypto errors should retry
+        let action = handler.handle_error(&Error::CryptoError("hash failed".into()));
+        assert!(matches!(action, RecoveryAction::Retry { .. }));
+    }
+
+    #[test]
+    fn test_error_handler_protocol_errors() {
+        let handler = ErrorHandler::new();
+
+        // Protocol errors should notify peer
+        let action = handler.handle_error(&Error::InvalidMessage("bad format".into()));
+        assert!(matches!(
+            action,
+            RecoveryAction::NotifyPeer { notify_type: 7 }
+        ));
+
+        let action = handler.handle_error(&Error::UnsupportedVersion(99));
+        assert!(matches!(action, RecoveryAction::NotifyPeer { .. }));
+    }
+
+    #[test]
+    fn test_error_handler_authentication_errors() {
+        let handler = ErrorHandler::new();
+
+        let action = handler.handle_error(&Error::AuthenticationFailed("bad sig".into()));
+        assert!(matches!(action, RecoveryAction::DeleteSa));
+    }
+
+    #[test]
+    fn test_error_handler_replay_attacks() {
+        let handler = ErrorHandler::new();
+
+        let action = handler.handle_error(&Error::ReplayDetected(12345));
+        assert!(matches!(action, RecoveryAction::Ignore));
+    }
+
+    #[test]
+    fn test_error_handler_state_errors() {
+        let handler = ErrorHandler::new();
+
+        let action = handler.handle_error(&Error::InvalidState("bad state".into()));
+        assert!(matches!(action, RecoveryAction::DeleteSa));
+
+        let action = handler.handle_error(&Error::InvalidStateTransition {
+            from: "Idle".into(),
+            to: "Established".into(),
+        });
+        assert!(matches!(action, RecoveryAction::DeleteSa));
+    }
+
+    #[test]
+    fn test_error_handler_sa_not_found() {
+        let handler = ErrorHandler::new();
+
+        let action = handler.handle_error(&Error::SaNotFound("SA-123".into()));
+        assert!(matches!(action, RecoveryAction::Ignore));
+    }
+
+    #[test]
+    fn test_error_handler_no_proposal_chosen() {
+        let handler = ErrorHandler::new();
+
+        let action = handler.handle_error(&Error::NoProposalChosen);
+        assert!(matches!(
+            action,
+            RecoveryAction::NotifyPeer { notify_type: 14 }
+        ));
+    }
+
+    #[test]
+    fn test_error_handler_set_retry_policy() {
+        let mut handler = ErrorHandler::new();
+
+        let custom_policy = RetryPolicy::new(
+            5,
+            std::time::Duration::from_secs(2),
+            1.5,
+            std::time::Duration::from_secs(30),
+        );
+
+        handler.set_default_retry_policy(custom_policy.clone());
+        assert_eq!(handler.default_retry_policy(), &custom_policy);
     }
 }

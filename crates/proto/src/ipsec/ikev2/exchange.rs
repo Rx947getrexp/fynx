@@ -47,9 +47,7 @@
 
 use super::constants::{ExchangeType, IkeFlags, PayloadType};
 use super::message::{IkeHeader, IkeMessage};
-use super::payload::{
-    AuthPayload, IdPayload, IkePayload, KePayload, NoncePayload, NotifyPayload, SaPayload,
-};
+use super::payload::{IdPayload, IkePayload, KePayload, NoncePayload, SaPayload};
 use super::proposal::{select_proposal, Proposal};
 use super::state::IkeState;
 use crate::ipsec::{Error, Result};
@@ -1008,7 +1006,7 @@ impl IkeAuthExchange {
         context: &mut IkeSaContext,
         ike_sa_init_request: &[u8],
         id_payload: IdPayload,
-        psk: &[u8],
+        _psk: &[u8],
         child_proposals: Vec<Proposal>,
         ts_i: super::payload::TrafficSelectorsPayload,
         ts_r: super::payload::TrafficSelectorsPayload,
@@ -1155,7 +1153,7 @@ impl IkeAuthExchange {
         context: &mut IkeSaContext,
         ike_sa_init_request: &[u8],
         request: &IkeMessage,
-        psk: &[u8],
+        _psk: &[u8],
         configured_proposals: &[Proposal],
     ) -> Result<(
         IdPayload,

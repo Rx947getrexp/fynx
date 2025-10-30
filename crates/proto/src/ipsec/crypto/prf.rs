@@ -2,7 +2,7 @@
 //!
 //! Implements PRF algorithms for IKEv2 key derivation as defined in RFC 7296.
 
-use crate::ipsec::{Error, Result};
+use crate::ipsec::Result;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha384, Sha512};
 

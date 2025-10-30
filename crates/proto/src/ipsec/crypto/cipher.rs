@@ -3,18 +3,10 @@
 //! Implements encryption and decryption for SK payload as defined in RFC 7296.
 
 use crate::ipsec::{Error, Result};
-use aes::Aes128;
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes128Gcm, Aes256Gcm, Nonce as AesGcmNonce,
 };
-use cbc::{Decryptor, Encryptor};
-use cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use hmac::{Hmac, Mac};
-use sha2::{Sha256, Sha384, Sha512};
-
-type Aes128CbcEnc = Encryptor<Aes128>;
-type Aes128CbcDec = Decryptor<Aes128>;
 
 /// Cipher algorithm for SK payload encryption
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

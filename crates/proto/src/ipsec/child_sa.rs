@@ -157,9 +157,9 @@ pub struct SaLifetime {
     pub hard_bytes: Option<u64>,
 }
 
-impl SaLifetime {
+impl Default for SaLifetime {
     /// Create default lifetime (1 hour hard, 45 minutes soft)
-    pub fn default() -> Self {
+    fn default() -> Self {
         SaLifetime {
             soft_time: Duration::from_secs(45 * 60), // 45 minutes
             hard_time: Duration::from_secs(60 * 60), // 60 minutes
@@ -167,7 +167,9 @@ impl SaLifetime {
             hard_bytes: None,
         }
     }
+}
 
+impl SaLifetime {
     /// Create custom lifetime with time limits
     pub fn new(soft_time: Duration, hard_time: Duration) -> Result<Self> {
         if soft_time >= hard_time {
