@@ -6,6 +6,8 @@
 #![cfg(feature = "ipsec")]
 
 use fynx_proto::ipsec::{
+    child_sa::ChildSa,
+    esp::EspPacket,
     ikev2::{
         constants::ExchangeType,
         exchange::{IkeAuthExchange, IkeSaContext, IkeSaInitExchange},
@@ -491,4 +493,230 @@ fn test_sk_payload_encryption_keys() {
     assert_eq!(resp_send_key, recv_key);
     // Responder's recv key should match initiator's send key
     assert_eq!(resp_recv_key, send_key);
+}
+
+//
+// Test Cases - ESP Data Transfer
+//
+
+/// Helper to create test Child SA for outbound (encryption)
+fn create_outbound_child_sa(spi: u32, sk_e: Vec<u8>) -> ChildSa {
+    use fynx_proto::ipsec::child_sa::{ChildSaState, SaLifetime};
+    use std::time::Duration;
+
+    let proposal = create_test_esp_proposal();
+    let ts = create_test_traffic_selectors();
+
+    ChildSa {
+        spi,
+        protocol: 50, // ESP
+        is_inbound: false,
+        sk_e,
+        sk_a: Some(vec![0xBB; 32]), // Dummy auth key (not used in AEAD)
+        ts_i: ts.clone(),
+        ts_r: ts,
+        proposal,
+        seq_out: 1,
+        replay_window: None, // Disabled for outbound
+        state: ChildSaState::Active,
+        lifetime: SaLifetime {
+            soft_time: Duration::from_secs(2700),  // 45 minutes
+            hard_time: Duration::from_secs(3600),  // 60 minutes
+            soft_bytes: Some(900_000_000),         // 900 MB
+            hard_bytes: Some(1_000_000_000),       // 1 GB
+        },
+        created_at: std::time::Instant::now(),
+        bytes_processed: 0,
+        rekey_initiated_at: None,
+    }
+}
+
+/// Helper to create test Child SA for inbound (decryption)
+fn create_inbound_child_sa(spi: u32, sk_e: Vec<u8>) -> ChildSa {
+    use fynx_proto::ipsec::child_sa::{ChildSaState, SaLifetime};
+    use fynx_proto::ipsec::replay::ReplayWindow;
+    use std::time::Duration;
+
+    let proposal = create_test_esp_proposal();
+    let ts = create_test_traffic_selectors();
+
+    ChildSa {
+        spi,
+        protocol: 50, // ESP
+        is_inbound: true,
+        sk_e,
+        sk_a: Some(vec![0xBB; 32]),
+        ts_i: ts.clone(),
+        ts_r: ts,
+        proposal,
+        seq_out: 0,
+        replay_window: Some(ReplayWindow::new(64)), // 64-packet window
+        state: ChildSaState::Active,
+        lifetime: SaLifetime {
+            soft_time: Duration::from_secs(2700),
+            hard_time: Duration::from_secs(3600),
+            soft_bytes: Some(900_000_000),
+            hard_bytes: Some(1_000_000_000),
+        },
+        created_at: std::time::Instant::now(),
+        bytes_processed: 0,
+        rekey_initiated_at: None,
+    }
+}
+
+#[test]
+fn test_esp_encrypt_decrypt_single_packet() {
+    // Create matching Child SAs (same key for both directions in test)
+    let encryption_key = vec![0x42; 16]; // AES-128 key
+    let spi = 0x12345678;
+
+    let mut sa_out = create_outbound_child_sa(spi, encryption_key.clone());
+    let mut sa_in = create_inbound_child_sa(spi, encryption_key);
+
+    // Original payload
+    let payload = b"Hello, ESP! This is a test packet.";
+    let next_header = 4; // IPv4
+
+    // Encrypt (encapsulate)
+    let esp_packet = EspPacket::encapsulate(&mut sa_out, payload, next_header)
+        .expect("Failed to encapsulate");
+
+    // Verify ESP packet structure
+    assert_eq!(esp_packet.spi, spi);
+    assert_eq!(esp_packet.sequence, 1);
+    assert!(!esp_packet.iv.is_empty());
+    assert!(!esp_packet.encrypted_data.is_empty());
+
+    // Decrypt (decapsulate)
+    let (decrypted, recovered_next_header) = esp_packet
+        .decapsulate(&mut sa_in)
+        .expect("Failed to decapsulate");
+
+    // Verify decrypted payload matches original
+    assert_eq!(decrypted, payload);
+    assert_eq!(recovered_next_header, next_header);
+
+    // Verify sequence numbers updated
+    assert_eq!(sa_out.seq_out, 2); // Incremented after encryption
+}
+
+#[test]
+fn test_esp_sequence_number_handling() {
+    let encryption_key = vec![0x99; 16];
+    let spi = 0xABCDEF00;
+
+    let mut sa_out = create_outbound_child_sa(spi, encryption_key.clone());
+    let mut sa_in = create_inbound_child_sa(spi, encryption_key);
+
+    let payload = b"Test packet";
+
+    // Send multiple packets and verify sequence numbers
+    for expected_seq in 1..=5 {
+        let esp = EspPacket::encapsulate(&mut sa_out, payload, 4)
+            .expect("Encapsulation failed");
+
+        assert_eq!(esp.sequence, expected_seq as u32);
+        assert_eq!(sa_out.seq_out, (expected_seq + 1) as u64);
+
+        // Decrypt should succeed
+        let (decrypted, _) = esp.decapsulate(&mut sa_in).expect("Decapsulation failed");
+        assert_eq!(decrypted, payload);
+    }
+}
+
+#[test]
+fn test_esp_anti_replay_protection() {
+    let encryption_key = vec![0x77; 16];
+    let spi = 0x11223344;
+
+    let mut sa_out = create_outbound_child_sa(spi, encryption_key.clone());
+    let mut sa_in = create_inbound_child_sa(spi, encryption_key);
+
+    let payload = b"Replay test";
+
+    // Send first packet
+    let esp1 = EspPacket::encapsulate(&mut sa_out, payload, 4).unwrap();
+    assert_eq!(esp1.sequence, 1);
+
+    // Decrypt first packet - should succeed
+    let result1 = esp1.decapsulate(&mut sa_in);
+    assert!(result1.is_ok());
+
+    // Try to decrypt same packet again - should fail (replay detected)
+    let result2 = esp1.decapsulate(&mut sa_in);
+    assert!(result2.is_err());
+    match result2 {
+        Err(fynx_proto::ipsec::Error::ReplayDetected(_)) => {}, // Expected
+        _ => panic!("Expected ReplayDetected error"),
+    }
+
+    // Send second packet
+    let esp2 = EspPacket::encapsulate(&mut sa_out, payload, 4).unwrap();
+    assert_eq!(esp2.sequence, 2);
+
+    // Decrypt second packet - should succeed
+    let result3 = esp2.decapsulate(&mut sa_in);
+    assert!(result3.is_ok());
+}
+
+#[test]
+fn test_esp_multiple_packets() {
+    let encryption_key = vec![0x55; 16];
+    let spi = 0xFEDCBA98;
+
+    let mut sa_out = create_outbound_child_sa(spi, encryption_key.clone());
+    let mut sa_in = create_inbound_child_sa(spi, encryption_key);
+
+    // Send 20 different packets
+    for i in 0..20 {
+        let payload = format!("Packet number {}", i);
+        let payload_bytes = payload.as_bytes();
+
+        // Encrypt
+        let esp = EspPacket::encapsulate(&mut sa_out, payload_bytes, 4)
+            .expect("Encapsulation failed");
+
+        // Decrypt
+        let (decrypted, next_header) = esp
+            .decapsulate(&mut sa_in)
+            .expect("Decapsulation failed");
+
+        // Verify
+        assert_eq!(decrypted, payload_bytes);
+        assert_eq!(next_header, 4);
+        assert_eq!(esp.sequence, (i + 1) as u32);
+    }
+
+    // Verify final sequence number
+    assert_eq!(sa_out.seq_out, 21);
+}
+
+#[test]
+fn test_esp_large_packet() {
+    let encryption_key = vec![0x33; 16];
+    let spi = 0x99887766;
+
+    let mut sa_out = create_outbound_child_sa(spi, encryption_key.clone());
+    let mut sa_in = create_inbound_child_sa(spi, encryption_key);
+
+    // Create large payload (8KB)
+    let large_payload: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
+
+    // Encrypt large packet
+    let esp = EspPacket::encapsulate(&mut sa_out, &large_payload, 4)
+        .expect("Failed to encapsulate large packet");
+
+    // Verify packet was created
+    assert_eq!(esp.spi, spi);
+    assert!(esp.encrypted_data.len() > large_payload.len()); // Includes padding + tag
+
+    // Decrypt large packet
+    let (decrypted, next_header) = esp
+        .decapsulate(&mut sa_in)
+        .expect("Failed to decapsulate large packet");
+
+    // Verify full payload recovered
+    assert_eq!(decrypted, large_payload);
+    assert_eq!(next_header, 4);
+    assert_eq!(decrypted.len(), 8192);
 }
