@@ -86,7 +86,7 @@ impl CipherAlgorithm {
                 // Pad IV to 12 bytes (8-byte explicit + 4-byte implicit fixed field set to 0)
                 let mut nonce_bytes = [0u8; 12];
                 nonce_bytes[..8].copy_from_slice(iv);
-                let nonce = AesGcmNonce::from_slice(&nonce_bytes);
+                let nonce = AesGcmNonce::from(nonce_bytes);
 
                 let payload = Payload {
                     msg: plaintext,
@@ -94,7 +94,7 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .encrypt(nonce, payload)
+                    .encrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("AES-GCM encryption failed".into()))
             }
             CipherAlgorithm::AesGcm256 => {
@@ -103,7 +103,7 @@ impl CipherAlgorithm {
 
                 let mut nonce_bytes = [0u8; 12];
                 nonce_bytes[..8].copy_from_slice(iv);
-                let nonce = AesGcmNonce::from_slice(&nonce_bytes);
+                let nonce = AesGcmNonce::from(nonce_bytes);
 
                 let payload = Payload {
                     msg: plaintext,
@@ -111,7 +111,7 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .encrypt(nonce, payload)
+                    .encrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("AES-GCM encryption failed".into()))
             }
             CipherAlgorithm::ChaCha20Poly1305 => {
@@ -119,7 +119,13 @@ impl CipherAlgorithm {
                 let cipher = chacha20poly1305::ChaCha20Poly1305::new_from_slice(key)
                     .map_err(|_| Error::CryptoError("Failed to create ChaCha20 cipher".into()))?;
 
-                let nonce = chacha20poly1305::Nonce::from_slice(iv);
+                // Convert slice to array reference and create Nonce
+                let nonce_array: &[u8; 12] = iv.try_into()
+                    .map_err(|_| Error::InvalidIvLength {
+                        expected: 12,
+                        actual: iv.len(),
+                    })?;
+                let nonce = chacha20poly1305::Nonce::from(*nonce_array);
 
                 let payload = Payload {
                     msg: plaintext,
@@ -127,7 +133,7 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .encrypt(nonce, payload)
+                    .encrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("ChaCha20-Poly1305 encryption failed".into()))
             }
         }
@@ -177,7 +183,7 @@ impl CipherAlgorithm {
 
                 let mut nonce_bytes = [0u8; 12];
                 nonce_bytes[..8].copy_from_slice(iv);
-                let nonce = AesGcmNonce::from_slice(&nonce_bytes);
+                let nonce = AesGcmNonce::from(nonce_bytes);
 
                 let payload = Payload {
                     msg: ciphertext,
@@ -185,7 +191,7 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .decrypt(nonce, payload)
+                    .decrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("AES-GCM decryption failed".into()))
             }
             CipherAlgorithm::AesGcm256 => {
@@ -194,7 +200,7 @@ impl CipherAlgorithm {
 
                 let mut nonce_bytes = [0u8; 12];
                 nonce_bytes[..8].copy_from_slice(iv);
-                let nonce = AesGcmNonce::from_slice(&nonce_bytes);
+                let nonce = AesGcmNonce::from(nonce_bytes);
 
                 let payload = Payload {
                     msg: ciphertext,
@@ -202,14 +208,20 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .decrypt(nonce, payload)
+                    .decrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("AES-GCM decryption failed".into()))
             }
             CipherAlgorithm::ChaCha20Poly1305 => {
                 let cipher = chacha20poly1305::ChaCha20Poly1305::new_from_slice(key)
                     .map_err(|_| Error::CryptoError("Failed to create ChaCha20 cipher".into()))?;
 
-                let nonce = chacha20poly1305::Nonce::from_slice(iv);
+                // Convert slice to array reference and create Nonce
+                let nonce_array: &[u8; 12] = iv.try_into()
+                    .map_err(|_| Error::InvalidIvLength {
+                        expected: 12,
+                        actual: iv.len(),
+                    })?;
+                let nonce = chacha20poly1305::Nonce::from(*nonce_array);
 
                 let payload = Payload {
                     msg: ciphertext,
@@ -217,7 +229,7 @@ impl CipherAlgorithm {
                 };
 
                 cipher
-                    .decrypt(nonce, payload)
+                    .decrypt(&nonce, payload)
                     .map_err(|_| Error::CryptoError("ChaCha20-Poly1305 decryption failed".into()))
             }
         }
