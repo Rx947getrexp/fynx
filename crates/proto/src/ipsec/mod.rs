@@ -65,6 +65,7 @@
 #![forbid(unsafe_code)]
 
 pub mod child_sa;
+pub mod config;
 pub mod crypto;
 pub mod dpd;
 pub mod error;
