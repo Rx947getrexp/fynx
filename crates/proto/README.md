@@ -40,7 +40,7 @@ Enterprise-grade VPN protocol with comprehensive features:
 Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-fynx-proto = { version = "0.1.0-alpha.1", features = ["ssh"] }
+fynx-proto = { version = "0.1.0-alpha.2", features = ["ssh"] }
 tokio = { version = "1.35", features = ["full"] }
 ```
 
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-fynx-proto = { version = "0.1.0-alpha.1", features = ["ipsec"] }
+fynx-proto = { version = "0.1.0-alpha.2", features = ["ipsec"] }
 tokio = { version = "1.35", features = ["full"] }
 ```
 

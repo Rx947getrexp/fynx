@@ -5,7 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0-alpha.1] - 2025-10-31
+## [0.1.0-alpha.2] - 2025-10-31
+
+### Added
+
+- **Complete IPSec/IKEv2 Implementation**: This release adds the full production-ready IPSec protocol implementation with 567 tests
+- **IPSec Examples**: Added `ipsec_client.rs` and `ipsec_server.rs` examples demonstrating the high-level APIs
+- **Comprehensive Documentation**: Updated README, added CHANGELOG, LICENSE files, and improved crates.io metadata
+
+### Changed
+
+- **README.md**: Complete rewrite to showcase both SSH and IPSec protocols with usage examples
+- **Cargo.toml**: Updated description, keywords, and categories for better discoverability
+
+### Fixed
+
+- **SSH Integration Tests**: Fixed host key verification issues by adding test configuration
+- **Generic Array Deprecation**: Updated from deprecated `from_slice()` to `From` trait in AEAD cipher implementations
+
+### Notes
+
+**Important**: Version 0.1.0-alpha.1 on crates.io contained only SSH protocol. This version (0.1.0-alpha.2) is the first release with complete IPSec/IKEv2 implementation including:
+- 567 IPSec tests + 12 benchmarks
+- High-level client/server APIs
+- Production features (logging, metrics, error handling)
+- NAT-T, DPD, SA rekeying support
+
+Total: 745 tests passing (SSH: 178, IPSec: 567)
+
+## [0.1.0-alpha.1] - 2025-10-23 (crates.io)
 
 ### Added
 
@@ -142,4 +170,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.1.0-alpha.2]: https://github.com/Rx947getrexp/fynx/releases/tag/fynx-proto-v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/Rx947getrexp/fynx/releases/tag/fynx-proto-v0.1.0-alpha.1
