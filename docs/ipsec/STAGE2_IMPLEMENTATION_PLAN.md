@@ -287,6 +287,24 @@ impl IpsecClient {
 - [x] Sub-Stage 3: Server API (5 tests passing)
 - [x] Sub-Stage 4: Shutdown (2 tests passing)
 - [x] Sub-Stage 5: Background Tasks (2 tests passing)
-- [ ] Sub-Stage 6: Integration Tests
+- [x] Sub-Stage 6: Integration Tests (6 tests passing)
 
-**Next Action**: Begin Sub-Stage 6 - End-to-end client/server integration tests
+**Status**: ✅ STAGE 2 COMPLETE
+
+## Summary
+
+Phase 5 Stage 2 (High-Level API Design) is now complete.
+
+**Total Tests**: 25 new tests (19 unit + 6 integration)
+**Total Code**: ~2,100 lines across client.rs, server.rs, config.rs
+**Test Coverage**: 548 total IPSec tests passing (517 lib + 6 API + 25 protocol)
+
+**Deliverables**:
+- ✅ Configuration API with builder pattern
+- ✅ Async IpsecClient with connect(), send_packet(), recv_packet()
+- ✅ Async IpsecServer with bind(), accept(), IpsecSession
+- ✅ Graceful shutdown with DELETE notifications
+- ✅ Background task API for DPD and rekeying
+- ✅ Comprehensive integration tests
+
+**Next**: Phase 5 Stage 3 - Advanced Features (if planned) or Phase 6 - Application Layer
