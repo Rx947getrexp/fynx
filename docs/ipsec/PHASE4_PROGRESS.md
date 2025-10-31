@@ -1,9 +1,9 @@
-# IPSec Phase 4 Progress Report
+# IPSec Phase 4 & 5 Progress Report
 
-**Date**: 2025-10-30
-**Phase**: Phase 4 - Advanced Features and IKE SA Management
-**Overall Status**: 🎉 100% COMPLETE (5/5 stages)
-**Last Updated**: 2025-10-30
+**Date**: 2025-10-31
+**Phase**: Phase 4 Complete, Phase 5 In Progress
+**Overall Status**: Phase 4: ✅ 100% COMPLETE (5/5 stages), Phase 5: 🚀 20% COMPLETE (1/5 stages)
+**Last Updated**: 2025-10-31
 
 ---
 
@@ -475,6 +475,121 @@ All dependencies satisfied. Phase 4 is complete and ready for Phase 5.
 
 ---
 
-**Document Version**: 2.0 (Phase 4 Complete)
-**Last Updated**: 2025-10-30
-**Status**: FINAL - Phase 4 Complete
+## Phase 5 - Integration Testing and Validation
+
+**Start Date**: 2025-10-31
+**Status**: 🚀 IN PROGRESS (1/5 stages complete)
+
+### ✅ Stage 1: Integration Tests - COMPLETE
+
+**Status**: ✅ Complete
+**File**: `crates/proto/tests/ipsec_integration.rs` (+300 lines)
+**Commits**: `[ESP commit hash]`, `5aaa739`
+**Tests**: 20 integration tests passing
+**Actual Time**: ~3 hours
+
+**What Was Implemented**:
+
+#### Test Categories (20 tests total):
+
+1. **Basic IKEv2 Handshake (10 tests)** - Implemented in previous session:
+   - test_basic_ike_sa_init_exchange - Full IKE_SA_INIT exchange
+   - test_full_ike_handshake - Complete IKE_SA_INIT + IKE_AUTH flow
+   - test_invalid_state_transitions - State machine validation
+   - test_message_id_sequencing - Message ID tracking
+   - test_proposal_selection - Algorithm negotiation
+   - test_create_request_invalid_state - Error handling
+   - test_ike_auth_without_keys - Missing crypto material
+   - test_key_derivation - SKEYSEED derivation
+   - test_key_derivation_missing_nonce - Error case
+   - test_sk_payload_encryption_keys - Payload encryption
+
+2. **ESP Data Transfer (5 tests)** - Implemented this session:
+   - test_esp_encrypt_decrypt_single_packet - Basic ESP encapsulation/decapsulation
+   - test_esp_sequence_number_handling - Sequence number management (1-5)
+   - test_esp_anti_replay_protection - Replay attack detection
+   - test_esp_multiple_packets - Stress test with 20 packets
+   - test_esp_large_packet - 8KB payload handling
+
+3. **SA Lifecycle Management (5 tests)** - Implemented this session:
+   - test_ike_sa_rekeying_soft_lifetime - IKE SA rekeying using CREATE_CHILD_SA
+   - test_child_sa_rekeying - Child SA rekeying with new SPI allocation
+   - test_sa_graceful_deletion - Child SA DELETE request creation
+   - test_delete_ike_sa - IKE SA DELETE request creation
+   - test_hard_lifetime_expiration_check - Lifetime expiration validation
+
+**Helper Functions Added**:
+
+- `create_test_ike_proposal()` - IKE SA proposal with AES-GCM-128, HMAC-SHA256, DH Group14
+- `create_test_esp_proposal()` - ESP SA proposal with AES-GCM-128, No ESN
+- `create_test_traffic_selectors()` - IPv4 ANY traffic selectors
+- `create_outbound_child_sa()` - Test Child SA for encryption
+- `create_inbound_child_sa()` - Test Child SA for decryption with replay window
+- `create_established_ike_sa()` - Fully established IKE SA context with encryption keys
+
+**Key Features Tested**:
+- End-to-end IKEv2 handshake (IKE_SA_INIT + IKE_AUTH)
+- ESP packet encryption/decryption with AEAD
+- Sequence number management and anti-replay protection
+- IKE SA and Child SA rekeying mechanisms
+- SA deletion via INFORMATIONAL exchange
+- Lifetime-based SA management
+
+**Test Coverage**: 20 integration tests (100% passing)
+
+**Current Status**:
+```bash
+$ cargo test --test ipsec_integration --features ipsec
+test result: ok. 20 passed; 0 failed; 0 ignored
+```
+
+---
+
+### ⏳ Stage 2: Error Recovery Tests - PENDING
+
+**Status**: ⏳ Pending
+**Planned Tests**: 5 error recovery tests
+- Invalid proposal handling (NO_PROPOSAL_CHOSEN)
+- Authentication failure scenarios
+- Network timeout and retry logic
+- Malformed packet handling
+- State machine error recovery
+
+**Estimated Time**: 2-3 hours
+
+---
+
+### ⏳ Stage 3: Performance Tests - PENDING
+
+**Status**: ⏳ Pending
+**Estimated Time**: 3-4 hours
+
+---
+
+### ⏳ Stage 4: Interoperability Tests - PENDING
+
+**Status**: ⏳ Pending
+**Estimated Time**: 4-5 hours
+
+---
+
+### ⏳ Stage 5: Documentation and Validation - PENDING
+
+**Status**: ⏳ Pending
+**Estimated Time**: 2-3 hours
+
+---
+
+## Phase 5 Progress Summary
+
+**Current Progress**: 20% complete (1/5 stages)
+**Tests Added**: 20 integration tests
+**Lines Added**: ~300 lines (test code)
+**Time Spent**: ~3 hours
+**Next Stage**: Error Recovery Tests (Stage 2)
+
+---
+
+**Document Version**: 3.0 (Phase 4 Complete, Phase 5 Stage 1 Complete)
+**Last Updated**: 2025-10-31
+**Status**: Phase 4 COMPLETE, Phase 5 IN PROGRESS
