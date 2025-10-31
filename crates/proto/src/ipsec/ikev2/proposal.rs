@@ -247,6 +247,101 @@ impl Transform {
     pub fn is_compatible_with(&self, other: &Transform) -> bool {
         self.transform_type == other.transform_type && self.transform_id == other.transform_id
     }
+
+    /// Serialize transform to bytes (RFC 7296 Section 3.3.2)
+    ///
+    /// Format:
+    /// - Byte 0: Last/More flag (0 = last, 3 = more)
+    /// - Bytes 1-3: Reserved
+    /// - Bytes 4-5: Transform Length
+    /// - Byte 6: Transform Type
+    /// - Byte 7: Reserved
+    /// - Bytes 8-9: Transform ID
+    /// - Bytes 10+: Attributes (if any)
+    pub fn to_bytes(&self, is_last: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Calculate total length (from length field onwards)
+        // Transform Length = length field (2) + type (1) + reserved (1) + id (2) + attributes
+        // = 6 + attr_len
+        let attr_bytes: Vec<Vec<u8>> = self.attributes.iter().map(|attr| {
+            // Attribute format: 2 bytes type/len, then value
+            let mut ab = Vec::new();
+            ab.extend_from_slice(&attr.attr_type.to_be_bytes());
+            ab.extend_from_slice(&attr.value);
+            ab
+        }).collect();
+        let attr_len: usize = attr_bytes.iter().map(|ab| ab.len()).sum();
+        let total_len = 2 + 1 + 1 + 2 + attr_len; // = 6 + attr_len
+
+        // Byte 0: Last/More (0 = last, 3 = more)
+        bytes.push(if is_last { 0 } else { 3 });
+
+        // Bytes 1-3: Reserved
+        bytes.extend_from_slice(&[0u8; 3]);
+
+        // Bytes 4-5: Transform Length
+        bytes.extend_from_slice(&(total_len as u16).to_be_bytes());
+
+        // Byte 6: Transform Type
+        bytes.push(self.transform_type.to_u8());
+
+        // Byte 7: Reserved
+        bytes.push(0);
+
+        // Bytes 8-9: Transform ID
+        bytes.extend_from_slice(&self.transform_id.to_be_bytes());
+
+        // Attributes
+        for attr_byte in attr_bytes {
+            bytes.extend_from_slice(&attr_byte);
+        }
+
+        bytes
+    }
+
+    /// Parse transform from bytes
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, bool, usize)> {
+        if data.len() < 8 {
+            return Err(Error::BufferTooShort {
+                required: 8,
+                available: data.len(),
+            });
+        }
+
+        // Byte 0: Last/More
+        let is_last = data[0] == 0;
+
+        // Bytes 4-5: Transform Length
+        let transform_len = u16::from_be_bytes([data[4], data[5]]) as usize;
+
+        if data.len() < transform_len {
+            return Err(Error::BufferTooShort {
+                required: transform_len,
+                available: data.len(),
+            });
+        }
+
+        // Byte 6: Transform Type
+        let transform_type = TransformType::from_u8(data[6])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown transform type: {}", data[6])))?;
+
+        // Bytes 8-9: Transform ID
+        let transform_id = u16::from_be_bytes([data[8], data[9]]);
+
+        // Parse attributes (simplified - skip for now)
+        let attributes = Vec::new();
+
+        let transform = Transform {
+            transform_type,
+            transform_id,
+            attributes,
+        };
+
+        // Return total bytes consumed (including last/more + reserved header)
+        // = 4 (header) + transform_len
+        Ok((transform, is_last, 4 + transform_len))
+    }
 }
 
 /// Protocol ID for proposals
@@ -351,6 +446,135 @@ impl Proposal {
             .iter()
             .find(|t| t.transform_type == transform_type)
     }
+
+    /// Serialize proposal to bytes (RFC 7296 Section 3.3.1)
+    ///
+    /// Format:
+    /// - Byte 0: Last/More flag (0 = last, 2 = more)
+    /// - Bytes 1-3: Reserved
+    /// - Bytes 4-5: Proposal Length
+    /// - Byte 6: Proposal Number
+    /// - Byte 7: Protocol ID
+    /// - Byte 8: SPI Size
+    /// - Byte 9: Num Transforms
+    /// - Bytes 10+: SPI (variable)
+    /// - Transforms
+    pub fn to_bytes(&self, is_last: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Serialize all transforms
+        let transform_bytes: Vec<Vec<u8>> = self.transforms
+            .iter()
+            .enumerate()
+            .map(|(i, t)| t.to_bytes(i == self.transforms.len() - 1))
+            .collect();
+        let transforms_len: usize = transform_bytes.iter().map(|tb| tb.len()).sum();
+
+        // Calculate total length (from length field onwards)
+        // Proposal Length = length (2) + proposal_num (1) + protocol_id (1) + spi_size (1) + num_transforms (1) + SPI + transforms
+        // = 6 + spi_size + transforms_len
+        let spi_size = self.spi.len();
+        let total_len = 2 + 1 + 1 + 1 + 1 + spi_size + transforms_len; // = 6 + spi_size + transforms_len
+
+        // Byte 0: Last/More (0 = last, 2 = more)
+        bytes.push(if is_last { 0 } else { 2 });
+
+        // Bytes 1-3: Reserved
+        bytes.extend_from_slice(&[0u8; 3]);
+
+        // Bytes 4-5: Proposal Length
+        bytes.extend_from_slice(&(total_len as u16).to_be_bytes());
+
+        // Byte 6: Proposal Number
+        bytes.push(self.proposal_num);
+
+        // Byte 7: Protocol ID
+        bytes.push(self.protocol_id.to_u8());
+
+        // Byte 8: SPI Size
+        bytes.push(spi_size as u8);
+
+        // Byte 9: Num Transforms
+        bytes.push(self.transforms.len() as u8);
+
+        // SPI
+        bytes.extend_from_slice(&self.spi);
+
+        // Transforms
+        for transform_byte in transform_bytes {
+            bytes.extend_from_slice(&transform_byte);
+        }
+
+        bytes
+    }
+
+    /// Parse proposal from bytes
+    pub fn from_bytes(data: &[u8]) -> Result<(Self, bool, usize)> {
+        if data.len() < 8 {
+            return Err(Error::BufferTooShort {
+                required: 8,
+                available: data.len(),
+            });
+        }
+
+        // Byte 0: Last/More
+        let is_last = data[0] == 0;
+
+        // Bytes 4-5: Proposal Length
+        let proposal_len = u16::from_be_bytes([data[4], data[5]]) as usize;
+
+        if data.len() < proposal_len {
+            return Err(Error::BufferTooShort {
+                required: proposal_len,
+                available: data.len(),
+            });
+        }
+
+        // Byte 6: Proposal Number
+        let proposal_num = data[6];
+
+        // Byte 7: Protocol ID
+        let protocol_id = ProtocolId::from_u8(data[7])
+            .ok_or_else(|| Error::InvalidPayload(format!("Unknown protocol ID: {}", data[7])))?;
+
+        // Byte 8: SPI Size
+        let spi_size = data[8] as usize;
+
+        // Byte 9: Num Transforms
+        let num_transforms = data[9] as usize;
+
+        // Validate we have enough data for SPI
+        if data.len() < 10 + spi_size {
+            return Err(Error::BufferTooShort {
+                required: 10 + spi_size,
+                available: data.len(),
+            });
+        }
+
+        // Parse SPI
+        let spi = data[10..10 + spi_size].to_vec();
+
+        // Parse transforms
+        let mut transforms = Vec::new();
+        let mut offset = 10 + spi_size;
+
+        for _ in 0..num_transforms {
+            let (transform, _, transform_len) = Transform::from_bytes(&data[offset..])?;
+            transforms.push(transform);
+            offset += transform_len;
+        }
+
+        let proposal = Proposal {
+            proposal_num,
+            protocol_id,
+            spi,
+            transforms,
+        };
+
+        // Return total bytes consumed (including last/more + reserved header)
+        // = 4 (header) + proposal_len
+        Ok((proposal, is_last, 4 + proposal_len))
+    }
 }
 
 /// Select first acceptable proposal from a list
@@ -381,6 +605,24 @@ pub fn select_proposal<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_transform_serialization() {
+        let transform = Transform::encr(EncrTransformId::AesGcm128);
+        let bytes = transform.to_bytes(true);
+
+        eprintln!("Transform bytes ({} bytes): {:02x?}", bytes.len(), &bytes[..std::cmp::min(20, bytes.len())]);
+        eprintln!("  Byte 0 (last/more): {}", bytes[0]);
+        eprintln!("  Bytes 4-5 (length): {:?}", u16::from_be_bytes([bytes[4], bytes[5]]));
+        eprintln!("  Byte 6 (type): {}", bytes[6]);
+        eprintln!("  Bytes 8-9 (id): {:?}", u16::from_be_bytes([bytes[8], bytes[9]]));
+
+        let (parsed, is_last, len) = Transform::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.transform_type, TransformType::Encr);
+        assert_eq!(parsed.transform_id, 20); // AES-GCM-128
+        assert!(is_last);
+        assert_eq!(len, bytes.len());
+    }
 
     #[test]
     fn test_transform_type_conversion() {

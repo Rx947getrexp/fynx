@@ -1274,8 +1274,10 @@ impl IkeAuthExchange {
             .as_ref()
             .ok_or_else(|| Error::Internal("Responder nonce not set".into()))?;
 
+        // Responder must use SK_pi to verify initiator's AUTH (not get_psk_auth_key which returns SK_pr!)
         let sk_pi = context
-            .get_psk_auth_key()
+            .sk_pi
+            .as_deref()
             .ok_or_else(|| Error::Internal("SK_pi not derived".into()))?;
 
         // Construct signed octets for AUTH verification
@@ -1591,20 +1593,23 @@ impl IkeAuthExchange {
         let ts_r = ts_r.ok_or_else(|| Error::InvalidMessage("Missing TSr payload".into()))?;
 
         // Verify AUTH payload
-        let nonce_r = context
-            .nonce_r
+        // Responder's signed octets use NonceI (initiator's nonce), not NonceR!
+        let nonce_i = context
+            .nonce_i
             .as_ref()
-            .ok_or_else(|| Error::Internal("Responder nonce not set".into()))?;
+            .ok_or_else(|| Error::Internal("Initiator nonce not set".into()))?;
 
+        // Initiator must use SK_pr to verify responder's AUTH (not get_psk_auth_key which returns SK_pi!)
         let sk_pr = context
-            .get_psk_auth_key()
+            .sk_pr
+            .as_deref()
             .ok_or_else(|| Error::Internal("SK_pr not derived".into()))?;
 
         // Construct signed octets for AUTH verification
         let signed_octets = auth::construct_responder_signed_octets(
             prf_alg,
             ike_sa_init_response,
-            nonce_r,
+            nonce_i,
             sk_pr,
             &peer_id.data,
         );

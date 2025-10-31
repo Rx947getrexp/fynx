@@ -385,24 +385,48 @@ impl SaPayload {
     }
 
     /// Parse SA payload from data (without header)
-    pub fn from_payload_data(_data: &[u8]) -> Result<Self> {
-        // For now, accept empty or any data
-        // Full proposal parsing will be implemented when needed
-        Ok(SaPayload {
-            proposals: Vec::new(),
-        })
+    pub fn from_payload_data(data: &[u8]) -> Result<Self> {
+        if data.is_empty() {
+            return Ok(SaPayload {
+                proposals: Vec::new(),
+            });
+        }
+
+        // Parse proposals
+        let mut proposals = Vec::new();
+        let mut offset = 0;
+
+        loop {
+            if offset >= data.len() {
+                break;
+            }
+
+            let (proposal, is_last, proposal_len) = Proposal::from_bytes(&data[offset..])?;
+            proposals.push(proposal);
+            offset += proposal_len;
+
+            if is_last {
+                break;
+            }
+        }
+
+        Ok(SaPayload { proposals })
     }
 
     /// Serialize SA payload to bytes (without header)
     pub fn to_payload_data(&self) -> Vec<u8> {
-        // For now, return empty if no proposals
-        // Full serialization will be implemented when needed
         if self.proposals.is_empty() {
             return Vec::new();
         }
 
-        // Placeholder: return minimal valid SA payload
-        Vec::new()
+        // Serialize all proposals
+        let mut bytes = Vec::new();
+        for (i, proposal) in self.proposals.iter().enumerate() {
+            let is_last = i == self.proposals.len() - 1;
+            bytes.extend_from_slice(&proposal.to_bytes(is_last));
+        }
+
+        bytes
     }
 
     /// Get total payload length (header + data)
