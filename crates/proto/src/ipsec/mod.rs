@@ -29,23 +29,88 @@
 //!   └── Anti-Replay Protection
 //! ```
 //!
-//! # Example (Future API)
+//! # Quick Start
 //!
-//! ```rust,ignore
-//! use fynx_proto::ipsec::IpsecClient;
+//! ## Client Example
+//!
+//! ```rust,no_run
+//! use fynx_proto::ipsec::{IpsecClient, ClientConfig};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut client = IpsecClient::new()
-//!         .with_psk("my-secret-key")
-//!         .with_local_id("client@example.com");
+//!     // Configure client
+//!     let config = ClientConfig::builder()
+//!         .with_local_id("client@example.com")
+//!         .with_remote_id("server@example.com")
+//!         .with_psk(b"my-secret-key")
+//!         .build()?;
 //!
-//!     client.connect("vpn.example.com:500").await?;
-//!     client.send_packet(&data).await?;
+//!     // Create client and connect
+//!     let mut client = IpsecClient::new(config);
+//!     client.connect("10.0.0.1:500".parse()?).await?;
+//!
+//!     // Send and receive encrypted data
+//!     client.send_packet(b"Hello, VPN!").await?;
+//!     let response = client.recv_packet().await?;
+//!     println!("Received: {:?}", response);
+//!
+//!     // Graceful shutdown
+//!     client.shutdown().await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Server Example
+//!
+//! ```rust,no_run
+//! use fynx_proto::ipsec::{IpsecServer, ServerConfig};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Configure server
+//!     let config = ServerConfig::builder()
+//!         .with_local_id("server@example.com")
+//!         .with_psk(b"my-secret-key")
+//!         .build()?;
+//!
+//!     // Bind server
+//!     let mut server = IpsecServer::bind(config, "0.0.0.0:500".parse()?).await?;
+//!     println!("IPSec server listening on port 500");
+//!
+//!     // Accept client connection
+//!     let (peer_addr, mut session) = server.accept().await?;
+//!     println!("Client connected from: {}", peer_addr);
+//!
+//!     // Handle encrypted data
+//!     // Note: In production, spawn this in a separate task
+//!     loop {
+//!         match server.recv_packet().await {
+//!             Ok((addr, data)) => {
+//!                 println!("Received from {}: {:?}", addr, data);
+//!                 // Echo back
+//!                 server.send_packet(addr, &data).await?;
+//!             }
+//!             Err(e) => {
+//!                 eprintln!("Error: {}", e);
+//!                 break;
+//!             }
+//!         }
+//!     }
 //!
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Features
+//!
+//! - **IKEv2 Handshake**: Automatic negotiation of Security Associations
+//! - **ESP Encryption**: AES-GCM-128/256, ChaCha20-Poly1305
+//! - **PSK Authentication**: Pre-shared key authentication
+//! - **NAT Traversal**: Automatic NAT-T detection and handling
+//! - **Dead Peer Detection**: Automatic peer liveness monitoring
+//! - **SA Rekeying**: Automatic Security Association renewal
+//! - **Anti-Replay**: Sequence number validation and replay protection
+//! - **Production Ready**: Structured logging, metrics, error handling
 //!
 //! # References
 //!
