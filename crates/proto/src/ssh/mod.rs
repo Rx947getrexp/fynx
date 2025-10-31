@@ -52,6 +52,7 @@ pub mod authorized_keys;
 pub mod client;
 pub mod connection;
 pub mod crypto;
+pub mod forwarding;
 pub mod hostkey;
 pub mod kex;
 pub mod kex_dh;
@@ -89,6 +90,9 @@ pub use packet::Packet;
 pub use privatekey::{
     EcdsaCurve, EcdsaPrivateKey, Ed25519PrivateKey, PasswordCallback, PrivateKey,
     PublicKey as PrivateKeyPublicKey, RsaPrivateKey, SimplePasswordCallback,
+};
+pub use forwarding::{
+    parse_forward_addr, DynamicForward, ForwardAddr, LocalForward, RemoteForward,
 };
 pub use server::{SessionHandler, SshServer, SshServerConfig, SshSession};
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
