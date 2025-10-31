@@ -49,6 +49,7 @@
 
 pub mod auth;
 pub mod authorized_keys;
+pub mod channel;
 pub mod client;
 pub mod connection;
 pub mod crypto;
@@ -70,6 +71,7 @@ pub use auth::{
     AuthRequest, AuthSuccess,
 };
 pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
+pub use channel::{ChannelState, SshChannel};
 pub use client::{SshClient, SshClientConfig};
 pub use connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure, ChannelOpen,

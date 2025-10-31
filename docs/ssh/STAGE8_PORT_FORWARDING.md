@@ -43,6 +43,29 @@ Already implemented in codebase:
 - ✅ `MessageType::GlobalRequest` - For tcpip-forward requests
 - ✅ Channel serialization/deserialization
 
+### ⚠️ **Architecture Limitation Discovered**
+
+**Current Issue**: `SshClient` uses synchronous request-response pattern
+- Only one operation can be active at a time
+- `send_packet()` / `receive_packet()` are blocking
+- Cannot handle multiple channels concurrently
+
+**Impact on Port Forwarding**:
+- Cannot accept multiple forwarding connections simultaneously
+- Each forwarded connection needs its own channel
+- Requires async message dispatching to multiple channels
+
+**Required Refactoring**:
+1. Implement async message dispatcher in `SshClient`
+2. Add channel state management (`HashMap<ChannelId, Channel>`)
+3. Provide channel read/write interfaces
+4. Support concurrent channel operations
+
+**Current Solution**:
+- Phase 1: Implement single-connection forwarding for testing
+- Phase 2: Refactor SshClient for multi-channel support
+- Phase 3: Enable full concurrent forwarding
+
 ### New Components to Add
 
 ```
