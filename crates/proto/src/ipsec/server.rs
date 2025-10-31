@@ -10,7 +10,7 @@ use super::{
     ikev2::{
         exchange::{IkeAuthExchange, IkeSaContext, IkeSaInitExchange},
         message::IkeMessage,
-        payload::{IdPayload, IdType, TrafficSelector, TrafficSelectorsPayload},
+        payload::{IdPayload, IdType},
         state::IkeState,
     },
     Error, Result,
@@ -214,7 +214,7 @@ impl IpsecServer {
         let auth_req = IkeMessage::from_bytes(&auth_req_bytes)?;
 
         // Process IKE_AUTH request
-        let (peer_id, selected_child, ts_i, ts_r) = IkeAuthExchange::process_request(
+        let (_peer_id, selected_child, ts_i, ts_r) = IkeAuthExchange::process_request(
             &mut ctx,
             &init_req_bytes,
             &auth_req,

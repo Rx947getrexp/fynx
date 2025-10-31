@@ -3,12 +3,12 @@
 //! Provides high-level async API for establishing IPSec tunnels as a client.
 
 use super::{
-    child_sa::{ChildSa, ChildSaState, SaLifetime},
+    child_sa::{ChildSa, ChildSaState},
     config::ClientConfig,
     crypto::PrfAlgorithm,
     esp::EspPacket,
     ikev2::{
-        exchange::{CreateChildSaExchange, IkeAuthExchange, IkeSaContext, IkeSaInitExchange},
+        exchange::{IkeAuthExchange, IkeSaContext, IkeSaInitExchange},
         payload::{IdPayload, IdType, TrafficSelector, TrafficSelectorsPayload},
         state::IkeState,
     },
@@ -201,7 +201,7 @@ impl IpsecClient {
         };
 
         // Create ID payload for responder
-        let id_r = IdPayload {
+        let _id_r = IdPayload {
             id_type: IdType::KeyId,
             data: self.config.remote_id.as_bytes().to_vec(),
         };
