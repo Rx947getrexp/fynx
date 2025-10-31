@@ -9,6 +9,7 @@ use fynx_proto::ipsec::{
     child_sa::ChildSa,
     esp::EspPacket,
     ikev2::{
+        auth,
         constants::ExchangeType,
         exchange::{CreateChildSaExchange, IkeAuthExchange, IkeSaContext, IkeSaInitExchange},
         informational::InformationalExchange,
@@ -1011,4 +1012,181 @@ fn test_hard_lifetime_expiration_check() {
 
     // Success: Lifetime expiration checking logic verified
     // In production, hard lifetime expiration would force immediate SA deletion
+}
+
+//
+// Test Cases - Error Recovery
+//
+
+#[test]
+fn test_invalid_proposal_no_proposal_chosen() {
+    use fynx_proto::ipsec::ikev2::proposal::select_proposal;
+
+    // Setup: initiator proposes AES-GCM-256, responder only supports AES-GCM-128
+    let initiator_proposals = vec![
+        Proposal::new(1, ProtocolId::Ike)
+            .add_transform(Transform::encr(EncrTransformId::AesGcm256)) // Only 256
+            .add_transform(Transform::prf(PrfTransformId::HmacSha256))
+            .add_transform(Transform::dh(DhTransformId::Group14)),
+    ];
+
+    let responder_proposals = vec![
+        Proposal::new(1, ProtocolId::Ike)
+            .add_transform(Transform::encr(EncrTransformId::AesGcm128)) // Only 128
+            .add_transform(Transform::prf(PrfTransformId::HmacSha256))
+            .add_transform(Transform::dh(DhTransformId::Group14)),
+    ];
+
+    // Attempt to select a proposal - should fail
+    let result = select_proposal(&initiator_proposals, &responder_proposals);
+
+    // Verify NO_PROPOSAL_CHOSEN error
+    assert!(result.is_err());
+
+    // In production, responder would send INFORMATIONAL with NO_PROPOSAL_CHOSEN notify
+    // and close the connection gracefully
+
+    // Success: Invalid proposal correctly rejected
+}
+
+#[test]
+fn test_authentication_failure_invalid_psk() {
+    use fynx_proto::ipsec::crypto::PrfAlgorithm;
+
+    // Setup: create initiator context with keys derived
+    let mut ctx_i = IkeSaContext::new_initiator([0x01; 8]);
+    ctx_i.state = IkeState::InitDone;
+    ctx_i.responder_spi = [0x02; 8];
+    ctx_i.nonce_i = Some(vec![0x11; 32]);
+    ctx_i.nonce_r = Some(vec![0x22; 32]);
+    ctx_i.shared_secret = Some(vec![0xAB; 32]);
+
+    let _ = ctx_i.derive_keys(PrfAlgorithm::HmacSha256, 16, 0);
+
+    // Create signed octets (mock IKE_SA_INIT bytes + nonce + ID)
+    let signed_octets = vec![0u8; 200]; // Mock signed octets
+
+    // Initiator creates AUTH payload using sk_pi (initiator's SK_p)
+    let sk_pi = ctx_i.sk_pi.clone().unwrap();
+    let auth_payload_correct = auth::compute_psk_auth(
+        PrfAlgorithm::HmacSha256,
+        &sk_pi,
+        &signed_octets,
+    );
+
+    // Create AUTH payload with wrong SK_p (simulating wrong PSK)
+    let wrong_sk_p = vec![0xFF; 32]; // Different key!
+    let auth_payload_wrong = auth::compute_psk_auth(
+        PrfAlgorithm::HmacSha256,
+        &wrong_sk_p,
+        &signed_octets,
+    );
+
+    // Verify with correct SK_p - should succeed
+    let result_correct = auth::verify_psk_auth(
+        PrfAlgorithm::HmacSha256,
+        &sk_pi,
+        &signed_octets,
+        &auth_payload_correct,
+    );
+    assert!(result_correct.is_ok());
+
+    // Verify with correct SK_p but wrong AUTH payload - should fail
+    let result_wrong = auth::verify_psk_auth(
+        PrfAlgorithm::HmacSha256,
+        &sk_pi,
+        &signed_octets,
+        &auth_payload_wrong,
+    );
+    assert!(result_wrong.is_err());
+
+    // In production, responder would send AUTHENTICATION_FAILED notify
+    // and delete the IKE SA
+
+    // Success: Authentication failure correctly detected
+}
+
+#[test]
+fn test_message_id_mismatch_detection() {
+    // Setup: create established IKE SA
+    let mut ctx = create_established_ike_sa(true);
+
+    // Set expected message ID
+    ctx.message_id = 5;
+
+    // Create a response with wrong message ID (6 instead of 4)
+    let wrong_message_id = 6;
+
+    // Attempt to validate the message ID - should fail
+    let result = ctx.validate_message_id(wrong_message_id, true); // true = response
+
+    // Verify error
+    assert!(result.is_err());
+    if let Err(e) = result {
+        // Should get InvalidMessageId error
+        assert!(matches!(
+            e,
+            fynx_proto::ipsec::Error::InvalidMessageId { .. }
+        ));
+    }
+
+    // Success: Message ID mismatch correctly detected
+    // In production, this would trigger connection reset
+}
+
+#[test]
+fn test_malformed_packet_buffer_too_short() {
+    use fynx_proto::ipsec::ikev2::message::IkeMessage;
+
+    // Create malformed packet: header claims 200 bytes but only 50 bytes provided
+    let mut malformed = vec![0u8; 50];
+
+    // Set IKE header with incorrect length field (200 bytes)
+    malformed[0..8].copy_from_slice(&[0x11; 8]); // Initiator SPI
+    malformed[8..16].copy_from_slice(&[0x22; 8]); // Responder SPI
+    malformed[16] = 0; // Next payload
+    malformed[17] = 0x20; // Version 2.0
+    malformed[18] = 34; // Exchange type (IKE_SA_INIT)
+    malformed[19] = 0x08; // Flags (Initiator)
+    malformed[20..24].copy_from_slice(&[0, 0, 0, 1]); // Message ID
+    malformed[24..28].copy_from_slice(&(200u32).to_be_bytes()); // Length = 200 (WRONG!)
+
+    // Attempt to parse - should fail
+    let result = IkeMessage::from_bytes(&malformed);
+
+    // Verify parsing error
+    assert!(result.is_err());
+    if let Err(e) = result {
+        // Should get BufferTooShort error
+        assert!(matches!(
+            e,
+            fynx_proto::ipsec::Error::BufferTooShort { .. }
+        ));
+    }
+
+    // Success: Malformed packet correctly rejected
+    // In production, such packets would be silently dropped
+}
+
+#[test]
+fn test_state_machine_invalid_transition() {
+    // Setup: create IKE SA in Idle state
+    let mut ctx = IkeSaContext::new_initiator([0x01; 8]);
+    ctx.state = IkeState::Idle;
+
+    // Attempt invalid state transition: Idle -> Established (skipping intermediate states)
+    let result = ctx.transition_to(IkeState::Established);
+
+    // Verify transition is rejected
+    assert!(result.is_err());
+    if let Err(e) = result {
+        // Should get InvalidState error
+        assert!(matches!(e, fynx_proto::ipsec::Error::InvalidState(_)));
+    }
+
+    // Verify state hasn't changed
+    assert_eq!(ctx.state, IkeState::Idle);
+
+    // Success: Invalid state transition correctly prevented
+    // This ensures protocol state machine integrity
 }
