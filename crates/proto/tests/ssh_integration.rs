@@ -7,11 +7,20 @@
 //! - Command execution
 
 use fynx_platform::FynxResult;
-use fynx_proto::ssh::client::SshClient;
+use fynx_proto::ssh::client::{SshClient, SshClientConfig};
 use fynx_proto::ssh::hostkey::{Ed25519HostKey, HostKey};
+use fynx_proto::ssh::known_hosts::StrictHostKeyChecking;
 use fynx_proto::ssh::server::{SessionHandler, SshServer};
 use std::sync::Arc;
 use tokio::time::{timeout, Duration};
+
+/// Helper function to create a test client config that accepts all hosts.
+/// For integration tests, we use `No` to skip host key verification and file I/O.
+fn test_client_config() -> SshClientConfig {
+    let mut config = SshClientConfig::default();
+    config.strict_host_key_checking = StrictHostKeyChecking::No;
+    config
+}
 
 /// Simple test handler that echoes commands.
 struct TestHandler;
@@ -42,7 +51,10 @@ async fn test_version_exchange() -> Result<(), Box<dyn std::error::Error>> {
     // Connect client
     let client = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -91,7 +103,10 @@ async fn test_kex_with_signature_verification() -> Result<(), Box<dyn std::error
     // Connect client - this performs version exchange and KEX
     let client = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -153,7 +168,10 @@ async fn test_authentication_flow() -> Result<(), Box<dyn std::error::Error>> {
     // Connect and authenticate
     let mut client = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -169,7 +187,7 @@ async fn test_authentication_flow() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(client.username(), Some("testuser"));
 
     // Wait for server to complete
-    timeout(Duration::from_secs(5), server_handle).await??;
+    let _ = timeout(Duration::from_secs(5), server_handle).await??;
 
     Ok(())
 }
@@ -211,7 +229,10 @@ async fn test_full_ssh_flow() -> Result<(), Box<dyn std::error::Error>> {
     // Client: connect, authenticate, execute command
     let mut client = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -268,7 +289,10 @@ async fn test_authentication_failure() -> Result<(), Box<dyn std::error::Error>>
     // Connect client
     let mut client = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -315,7 +339,10 @@ async fn test_exchange_hash_consistency() -> Result<(), Box<dyn std::error::Erro
     // Connect first client
     let client1 = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server1_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server1_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
@@ -343,7 +370,10 @@ async fn test_exchange_hash_consistency() -> Result<(), Box<dyn std::error::Erro
     // Connect second client
     let client2 = timeout(
         Duration::from_secs(5),
-        SshClient::connect(&format!("127.0.0.1:{}", server2_addr.port())),
+        SshClient::connect_with_config(
+            &format!("127.0.0.1:{}", server2_addr.port()),
+            test_client_config(),
+        ),
     )
     .await??;
 
