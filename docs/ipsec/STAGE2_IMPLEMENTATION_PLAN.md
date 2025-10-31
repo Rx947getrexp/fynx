@@ -282,11 +282,11 @@ impl IpsecClient {
 ## Current Status
 
 - [x] Planning complete
-- [ ] Sub-Stage 1: Config Structures
-- [ ] Sub-Stage 2: Client API
+- [x] Sub-Stage 1: Config Structures (5 tests passing)
+- [x] Sub-Stage 2: Client API (5 tests passing)
 - [ ] Sub-Stage 3: Server API
 - [ ] Sub-Stage 4: Shutdown
 - [ ] Sub-Stage 5: Background Tasks
 - [ ] Sub-Stage 6: Integration Tests
 
-**Next Action**: Begin Sub-Stage 1 - Create config.rs with ClientConfig and ServerConfig
+**Next Action**: Begin Sub-Stage 3 - Create server.rs with IpsecServer and IpsecSession

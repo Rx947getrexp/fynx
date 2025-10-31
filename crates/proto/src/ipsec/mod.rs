@@ -65,6 +65,7 @@
 #![forbid(unsafe_code)]
 
 pub mod child_sa;
+pub mod client;
 pub mod config;
 pub mod crypto;
 pub mod dpd;
@@ -75,4 +76,6 @@ pub mod nat;
 pub mod replay;
 
 // Re-export commonly used types
+pub use client::IpsecClient;
+pub use config::{ClientConfig, ServerConfig};
 pub use error::{Error, Result};
