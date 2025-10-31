@@ -74,8 +74,10 @@ pub mod esp;
 pub mod ikev2;
 pub mod nat;
 pub mod replay;
+pub mod server;
 
 // Re-export commonly used types
 pub use client::IpsecClient;
 pub use config::{ClientConfig, ServerConfig};
 pub use error::{Error, Result};
+pub use server::{IpsecServer, IpsecSession};
