@@ -34,7 +34,7 @@ use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsFile, StrictHostKeyChecki
 use crate::ssh::message::MessageType;
 use crate::ssh::packet::Packet;
 use crate::ssh::privatekey::PrivateKey;
-use crate::ssh::session::create_keepalive_message;
+use crate::ssh::session::{create_keepalive_message, ReconnectConfig};
 use crate::ssh::transport::{State, TransportConfig, TransportState};
 use crate::ssh::version::Version;
 use base64::Engine;
@@ -83,6 +83,11 @@ pub struct SshClientConfig {
     /// at this interval to keep the connection alive.
     /// Defaults to None (disabled).
     pub keepalive_interval: Option<Duration>,
+    /// Reconnection configuration.
+    ///
+    /// Controls automatic reconnection behavior when the connection is lost.
+    /// Defaults to disabled.
+    pub reconnect: ReconnectConfig,
 }
 
 // Manual Debug implementation because UserPromptCallback is not Debug
@@ -100,6 +105,7 @@ impl std::fmt::Debug for SshClientConfig {
                 &self.user_prompt_callback.as_ref().map(|_| "<callback>"),
             )
             .field("keepalive_interval", &self.keepalive_interval)
+            .field("reconnect", &self.reconnect)
             .finish()
     }
 }
@@ -118,6 +124,7 @@ impl Clone for SshClientConfig {
             known_hosts_file: self.known_hosts_file.clone(),
             user_prompt_callback: None, // Cannot clone closures
             keepalive_interval: self.keepalive_interval,
+            reconnect: self.reconnect,
         }
     }
 }
@@ -133,6 +140,7 @@ impl Default for SshClientConfig {
             known_hosts_file: None,
             user_prompt_callback: None,
             keepalive_interval: None,
+            reconnect: ReconnectConfig::default(),
         }
     }
 }

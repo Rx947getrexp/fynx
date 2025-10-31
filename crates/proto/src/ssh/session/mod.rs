@@ -6,5 +6,7 @@
 //! - Connection pooling (reusing connections)
 
 pub mod keepalive;
+pub mod reconnect;
 
 pub use keepalive::{create_keepalive_message, KeepaliveTask};
+pub use reconnect::{ExponentialBackoff, ReconnectConfig, ReconnectHandler};
