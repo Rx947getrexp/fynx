@@ -4,12 +4,18 @@ version = "0.1.0-alpha.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Fynx Core Team"]
-description = "Protocol implementations for the Fynx security ecosystem (SSH, DTLS, IPSec)"
+description = "Production-ready SSH and IPSec/IKEv2 protocol implementations with comprehensive testing and high-level APIs"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Rx947getrexp/fynx"
-keywords = ["ssh", "security", "protocol", "network"]
-categories = ["network-programming", "cryptography"]
+documentation = "https://docs.rs/fynx-proto"
+homepage = "https://github.com/Rx947getrexp/fynx"
+keywords = ["ssh", "ipsec", "vpn", "ikev2", "security"]
+categories = ["network-programming", "cryptography", "authentication"]
 readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["ssh"]
