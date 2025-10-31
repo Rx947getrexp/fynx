@@ -415,9 +415,44 @@ impl IpsecClient {
     ///
     /// Returns error if network I/O fails (but connection is still closed)
     pub async fn shutdown(&mut self) -> Result<()> {
-        // TODO: Implement graceful shutdown with INFORMATIONAL exchange
-        // For now, just close the socket
+        // Only send DELETE if we have an active IKE SA
+        if let Some(mut ctx) = self.ike_sa.take() {
+            // Best-effort: try to send DELETE messages
+            // Even if these fail, we'll clean up local resources
 
+            // 1. Send DELETE for all Child SAs
+            if !self.child_sas.is_empty() {
+                // Collect unique Child SA SPIs (filter out the high-bit duplicates)
+                let child_spis: Vec<Vec<u8>> = self
+                    .child_sas
+                    .keys()
+                    .filter(|spi| (*spi & 0x80000000) == 0) // Only keep original SPIs
+                    .map(|spi| spi.to_be_bytes().to_vec())
+                    .collect();
+
+                if !child_spis.is_empty() {
+                    if let Ok(delete_child_msg) =
+                        super::ikev2::informational::InformationalExchange::create_delete_child_sa_request(
+                            &mut ctx,
+                            child_spis,
+                        )
+                    {
+                        // Try to send, but ignore errors
+                        let _ = self.send_ike_message(&delete_child_msg).await;
+                    }
+                }
+            }
+
+            // 2. Send DELETE for IKE SA
+            if let Ok(delete_ike_msg) =
+                super::ikev2::informational::InformationalExchange::create_delete_ike_sa_request(&mut ctx)
+            {
+                // Try to send, but ignore errors
+                let _ = self.send_ike_message(&delete_ike_msg).await;
+            }
+        }
+
+        // 3. Clean up resources regardless of DELETE success
         self.socket = None;
         self.ike_sa = None;
         self.child_sas.clear();
@@ -574,5 +609,57 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::InvalidState(_)));
+    }
+
+    #[tokio::test]
+    async fn test_client_shutdown() {
+        let config = ClientConfig::builder()
+            .with_local_id("client@example.com")
+            .with_remote_id("server@example.com")
+            .with_psk(b"test-key")
+            .build()
+            .expect("Failed to build config");
+
+        let mut client = IpsecClient::new(config);
+
+        // Simulate connected state
+        let mut ctx = IkeSaContext::new_initiator([0x01; 8]);
+        ctx.state = crate::ipsec::ikev2::state::IkeState::Established;
+        ctx.message_id = 1;
+
+        // Add mock Child SA
+        let child_sa = ChildSa {
+            spi: 0x12345678,
+            protocol: 50,
+            is_inbound: false,
+            sk_e: vec![0u8; 16],
+            sk_a: Some(vec![0u8; 16]),
+            ts_i: TrafficSelectorsPayload {
+                selectors: vec![TrafficSelector::ipv4_any()],
+            },
+            ts_r: TrafficSelectorsPayload {
+                selectors: vec![TrafficSelector::ipv4_any()],
+            },
+            proposal: crate::ipsec::ikev2::proposal::Proposal::new(1, crate::ipsec::ikev2::proposal::ProtocolId::Esp),
+            seq_out: 1,
+            replay_window: None,
+            state: ChildSaState::Active,
+            lifetime: crate::ipsec::child_sa::SaLifetime::default(),
+            created_at: std::time::Instant::now(),
+            bytes_processed: 0,
+            rekey_initiated_at: None,
+        };
+
+        client.ike_sa = Some(ctx);
+        client.child_sas.insert(0x12345678, child_sa);
+
+        // Shutdown should succeed even without network
+        client.shutdown().await.expect("Shutdown failed");
+
+        // Verify cleanup
+        assert!(client.ike_sa.is_none());
+        assert!(client.socket.is_none());
+        assert_eq!(client.child_sas.len(), 0);
+        assert!(client.peer_addr.is_none());
     }
 }
