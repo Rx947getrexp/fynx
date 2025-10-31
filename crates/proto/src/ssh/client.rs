@@ -34,6 +34,7 @@ use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsFile, StrictHostKeyChecki
 use crate::ssh::message::MessageType;
 use crate::ssh::packet::Packet;
 use crate::ssh::privatekey::PrivateKey;
+use crate::ssh::session::create_keepalive_message;
 use crate::ssh::transport::{State, TransportConfig, TransportState};
 use crate::ssh::version::Version;
 use base64::Engine;
@@ -76,6 +77,12 @@ pub struct SshClientConfig {
     /// Arguments: (hostname, port, key_type, key_data)
     /// Returns: true to accept, false to reject
     pub user_prompt_callback: Option<UserPromptCallback>,
+    /// Keep-alive interval.
+    ///
+    /// If set, the client will automatically send SSH_MSG_IGNORE messages
+    /// at this interval to keep the connection alive.
+    /// Defaults to None (disabled).
+    pub keepalive_interval: Option<Duration>,
 }
 
 // Manual Debug implementation because UserPromptCallback is not Debug
@@ -92,6 +99,7 @@ impl std::fmt::Debug for SshClientConfig {
                 "user_prompt_callback",
                 &self.user_prompt_callback.as_ref().map(|_| "<callback>"),
             )
+            .field("keepalive_interval", &self.keepalive_interval)
             .finish()
     }
 }
@@ -109,6 +117,7 @@ impl Clone for SshClientConfig {
             strict_host_key_checking: self.strict_host_key_checking,
             known_hosts_file: self.known_hosts_file.clone(),
             user_prompt_callback: None, // Cannot clone closures
+            keepalive_interval: self.keepalive_interval,
         }
     }
 }
@@ -123,6 +132,7 @@ impl Default for SshClientConfig {
             strict_host_key_checking: StrictHostKeyChecking::Strict,
             known_hosts_file: None,
             user_prompt_callback: None,
+            keepalive_interval: None,
         }
     }
 }
@@ -1356,6 +1366,30 @@ impl SshClient {
         let _ = self.stream.shutdown().await;
 
         Ok(())
+    }
+
+    /// Sends a keep-alive message (SSH_MSG_IGNORE).
+    ///
+    /// This sends an SSH_MSG_IGNORE message with random data to keep the
+    /// connection alive and prevent idle timeouts.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use fynx_proto::ssh::client::SshClient;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = SshClient::connect("127.0.0.1:22").await?;
+    /// client.authenticate_password("user", "password").await?;
+    ///
+    /// // Manually send keep-alive
+    /// client.send_keepalive().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_keepalive(&mut self) -> FynxResult<()> {
+        let msg = create_keepalive_message(32);
+        self.send_packet(&msg).await
     }
 }
 

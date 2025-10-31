@@ -62,6 +62,7 @@ pub mod message;
 pub mod packet;
 pub mod privatekey;
 pub mod server;
+pub mod session;
 pub mod transport;
 pub mod version;
 
@@ -97,5 +98,6 @@ pub use forwarding::{
     parse_forward_addr, DynamicForward, ForwardAddr, LocalForward, RemoteForward,
 };
 pub use server::{SessionHandler, SshServer, SshServerConfig, SshSession};
+pub use session::{create_keepalive_message, KeepaliveTask};
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
 pub use version::Version;
