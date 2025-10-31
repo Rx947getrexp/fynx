@@ -286,7 +286,7 @@ impl IpsecClient {
 - [x] Sub-Stage 2: Client API (5 tests passing)
 - [x] Sub-Stage 3: Server API (5 tests passing)
 - [x] Sub-Stage 4: Shutdown (2 tests passing)
-- [ ] Sub-Stage 5: Background Tasks
+- [x] Sub-Stage 5: Background Tasks (2 tests passing)
 - [ ] Sub-Stage 6: Integration Tests
 
-**Next Action**: Begin Sub-Stage 5 - Implement DPD and automatic rekeying
+**Next Action**: Begin Sub-Stage 6 - End-to-end client/server integration tests

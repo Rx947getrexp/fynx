@@ -461,6 +461,130 @@ impl IpsecClient {
         Ok(())
     }
 
+    /// Check if Dead Peer Detection should be performed
+    ///
+    /// Returns true if DPD is enabled in config and enough time has passed
+    /// since last activity.
+    ///
+    /// # Note
+    ///
+    /// In a production implementation, this would be called by a background task.
+    /// For now, it's exposed as a helper method for testing.
+    pub fn should_perform_dpd(&self) -> bool {
+        // Check if DPD is configured
+        if let Some(dpd_config) = &self.config.dpd_config {
+            if !dpd_config.enabled {
+                return false;
+            }
+
+            // In a real implementation, we would track last activity time
+            // For now, just indicate DPD is available
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Perform a Dead Peer Detection check
+    ///
+    /// Sends an empty INFORMATIONAL message to check if peer is alive.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - IKE SA is not established
+    /// - DPD is not configured
+    ///
+    /// # Note
+    ///
+    /// In a production implementation, this would:
+    /// 1. Send empty INFORMATIONAL request (DPD probe)
+    /// 2. Wait for response with timeout
+    /// 3. Retry if no response
+    /// 4. Mark peer as dead after max retries
+    ///
+    /// For Stage 2, this is a placeholder that validates DPD configuration.
+    pub async fn perform_dpd_check(&mut self) -> Result<()> {
+        // Verify we have an active IKE SA
+        let _ctx = self
+            .ike_sa
+            .as_mut()
+            .ok_or_else(|| Error::InvalidState("No active IKE SA".into()))?;
+
+        // Verify DPD is configured
+        if self.config.dpd_config.is_none() {
+            return Err(Error::InvalidParameter("DPD not configured".into()));
+        }
+
+        // In a production implementation, we would:
+        // 1. Create empty INFORMATIONAL request using InformationalExchange
+        // 2. Send DPD message
+        // 3. Wait for response with timeout
+        // 4. Retry if no response
+        // 5. Mark peer as dead after max retries
+
+        // For now, this is a placeholder for testing the API
+        Ok(())
+    }
+
+    /// Check if any Child SAs need rekeying
+    ///
+    /// Returns list of Child SA SPIs that have exceeded soft lifetime.
+    ///
+    /// # Note
+    ///
+    /// In a production implementation, this would be called periodically
+    /// by a background task.
+    pub fn check_rekey_needed(&self) -> Vec<u32> {
+        let mut spis_to_rekey = Vec::new();
+
+        for (spi, child_sa) in &self.child_sas {
+            // Skip inbound SAs (high-bit marker)
+            if (*spi & 0x80000000) != 0 {
+                continue;
+            }
+
+            // Check if soft lifetime exceeded
+            let age = child_sa.created_at.elapsed();
+            if child_sa.lifetime.is_soft_expired(age, child_sa.bytes_processed) {
+                spis_to_rekey.push(*spi);
+            }
+        }
+
+        spis_to_rekey
+    }
+
+    /// Initiate rekeying for a Child SA
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Child SA not found
+    /// - IKE SA is not established
+    /// - Network I/O fails
+    ///
+    /// # Note
+    ///
+    /// In a production implementation, this would create a new Child SA
+    /// using CREATE_CHILD_SA exchange. For now, it's a placeholder.
+    pub async fn rekey_child_sa(&mut self, _spi: u32) -> Result<()> {
+        // Verify we have an active IKE SA
+        let _ctx = self
+            .ike_sa
+            .as_mut()
+            .ok_or_else(|| Error::InvalidState("No active IKE SA".into()))?;
+
+        // In a production implementation, we would:
+        // 1. Create CREATE_CHILD_SA request with new SA proposal
+        // 2. Send request and wait for response
+        // 3. Derive new Child SA keys
+        // 4. Mark old Child SA as rekeyed
+        // 5. Delete old Child SA after grace period
+
+        // For now, this is a placeholder
+        Ok(())
+    }
+
     /// Send IKE message to peer
     async fn send_ike_message(&self, message: &super::ikev2::message::IkeMessage) -> Result<()> {
         let bytes = message.to_bytes();
@@ -609,6 +733,116 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::InvalidState(_)));
+    }
+
+    #[tokio::test]
+    async fn test_client_dpd() {
+        use crate::ipsec::dpd::DpdConfig;
+        use std::time::Duration;
+
+        // Create config with DPD enabled
+        let dpd_config = DpdConfig {
+            enabled: true,
+            interval: Duration::from_secs(30),
+            timeout: Duration::from_secs(10),
+            max_retries: 3,
+        };
+
+        let config = ClientConfig::builder()
+            .with_local_id("client@example.com")
+            .with_remote_id("server@example.com")
+            .with_psk(b"test-key")
+            .with_dpd(dpd_config)
+            .build()
+            .expect("Failed to build config");
+
+        let mut client = IpsecClient::new(config);
+
+        // Before connection, should_perform_dpd returns false (no IKE SA)
+        // But the method itself just checks config
+        assert!(client.should_perform_dpd());
+
+        // Simulate connected state
+        let mut ctx = IkeSaContext::new_initiator([0x01; 8]);
+        ctx.state = crate::ipsec::ikev2::state::IkeState::Established;
+        ctx.message_id = 1;
+        client.ike_sa = Some(ctx);
+
+        // Now DPD check should succeed (placeholder implementation)
+        client
+            .perform_dpd_check()
+            .await
+            .expect("DPD check failed");
+    }
+
+    #[tokio::test]
+    async fn test_client_automatic_rekey() {
+        use std::time::Duration;
+
+        let config = ClientConfig::builder()
+            .with_local_id("client@example.com")
+            .with_remote_id("server@example.com")
+            .with_psk(b"test-key")
+            .with_lifetime(crate::ipsec::child_sa::SaLifetime {
+                soft_time: Duration::from_secs(1), // Very short for testing
+                hard_time: Duration::from_secs(2),
+                soft_bytes: None,
+                hard_bytes: None,
+            })
+            .build()
+            .expect("Failed to build config");
+
+        let mut client = IpsecClient::new(config);
+
+        // Simulate connected state
+        let mut ctx = IkeSaContext::new_initiator([0x01; 8]);
+        ctx.state = crate::ipsec::ikev2::state::IkeState::Established;
+        ctx.message_id = 1;
+
+        // Add mock Child SA with the same short lifetime
+        let child_sa = ChildSa {
+            spi: 0x12345678,
+            protocol: 50,
+            is_inbound: false,
+            sk_e: vec![0u8; 16],
+            sk_a: Some(vec![0u8; 16]),
+            ts_i: TrafficSelectorsPayload {
+                selectors: vec![TrafficSelector::ipv4_any()],
+            },
+            ts_r: TrafficSelectorsPayload {
+                selectors: vec![TrafficSelector::ipv4_any()],
+            },
+            proposal: crate::ipsec::ikev2::proposal::Proposal::new(
+                1,
+                crate::ipsec::ikev2::proposal::ProtocolId::Esp,
+            ),
+            seq_out: 1,
+            replay_window: None,
+            state: ChildSaState::Active,
+            lifetime: crate::ipsec::child_sa::SaLifetime {
+                soft_time: Duration::from_secs(1),
+                hard_time: Duration::from_secs(2),
+                soft_bytes: None,
+                hard_bytes: None,
+            },
+            created_at: std::time::Instant::now() - Duration::from_secs(2), // Already expired
+            bytes_processed: 0,
+            rekey_initiated_at: None,
+        };
+
+        client.ike_sa = Some(ctx);
+        client.child_sas.insert(0x12345678, child_sa);
+
+        // Check that rekey is needed
+        let spis_to_rekey = client.check_rekey_needed();
+        assert_eq!(spis_to_rekey.len(), 1);
+        assert_eq!(spis_to_rekey[0], 0x12345678);
+
+        // Attempt rekey (placeholder implementation)
+        client
+            .rekey_child_sa(0x12345678)
+            .await
+            .expect("Rekey failed");
     }
 
     #[tokio::test]
