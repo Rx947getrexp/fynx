@@ -99,8 +99,8 @@ pub use forwarding::{
 };
 pub use server::{SessionHandler, SshServer, SshServerConfig, SshSession};
 pub use session::{
-    create_keepalive_message, ExponentialBackoff, KeepaliveTask, ReconnectConfig,
-    ReconnectHandler,
+    create_keepalive_message, ConnectionPoolConfig, ExponentialBackoff, KeepaliveTask,
+    PoolAuth, ReconnectConfig, ReconnectHandler, SshConnectionPool,
 };
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
 pub use version::Version;
