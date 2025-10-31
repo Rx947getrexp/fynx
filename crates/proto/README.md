@@ -287,8 +287,11 @@ Run examples with:
 # SSH client example
 cargo run --example simple_client --features ssh
 
-# IPSec examples (coming soon)
-cargo run --example ipsec_client --features ipsec
+# IPSec client example
+cargo run --example ipsec_client --features ipsec -- 10.0.0.1:500 client@example.com server@example.com "my-secret-key"
+
+# IPSec server example (requires root/administrator for port 500)
+cargo run --example ipsec_server --features ipsec -- 0.0.0.0:500 server@example.com "my-secret-key"
 ```
 
 ## ⚙️ Feature Flags
