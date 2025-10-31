@@ -72,6 +72,8 @@ pub mod dpd;
 pub mod error;
 pub mod esp;
 pub mod ikev2;
+pub mod logging;
+pub mod metrics;
 pub mod nat;
 pub mod replay;
 pub mod server;

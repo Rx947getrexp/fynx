@@ -8,6 +8,88 @@ use std::fmt;
 /// Result type for IPSec operations
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Error codes for programmatic handling
+///
+/// Provides stable error codes that can be used for programmatic error handling,
+/// logging, and monitoring. Error codes are grouped by category (1000s = protocol,
+/// 2000s = crypto, 3000s = state, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    // Protocol errors (1000-1999)
+    /// Invalid message format (1001)
+    InvalidMessage = 1001,
+    /// Invalid payload (1002)
+    InvalidPayload = 1002,
+    /// Unsupported version (1003)
+    UnsupportedVersion = 1003,
+    /// No proposal chosen (1004)
+    NoProposalChosen = 1004,
+    /// Invalid syntax (1005)
+    InvalidSyntax = 1005,
+
+    // Crypto errors (2000-2999)
+    /// Authentication failed (2001)
+    AuthenticationFailed = 2001,
+    /// Cryptographic operation failed (2002)
+    CryptoError = 2002,
+    /// Invalid key length (2003)
+    InvalidKeyLength = 2003,
+
+    // State errors (3000-3999)
+    /// Invalid state (3001)
+    InvalidState = 3001,
+    /// Invalid state transition (3002)
+    InvalidStateTransition = 3002,
+    /// Security Association not found (3003)
+    SaNotFound = 3003,
+
+    // Security errors (4000-4999)
+    /// Replay attack detected (4001)
+    ReplayDetected = 4001,
+
+    // Network errors (5000-5999)
+    /// Network I/O error (5001)
+    NetworkError = 5001,
+    /// Network timeout (5002)
+    NetworkTimeout = 5002,
+
+    // Internal errors (9000-9999)
+    /// Internal error (9001)
+    InternalError = 9001,
+}
+
+impl ErrorCode {
+    /// Get error code as u32
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+
+    /// Get error code category name
+    pub fn category(self) -> &'static str {
+        match self {
+            ErrorCode::InvalidMessage
+            | ErrorCode::InvalidPayload
+            | ErrorCode::UnsupportedVersion
+            | ErrorCode::NoProposalChosen
+            | ErrorCode::InvalidSyntax => "Protocol",
+
+            ErrorCode::AuthenticationFailed
+            | ErrorCode::CryptoError
+            | ErrorCode::InvalidKeyLength => "Crypto",
+
+            ErrorCode::InvalidState
+            | ErrorCode::InvalidStateTransition
+            | ErrorCode::SaNotFound => "State",
+
+            ErrorCode::ReplayDetected => "Security",
+
+            ErrorCode::NetworkError | ErrorCode::NetworkTimeout => "Network",
+
+            ErrorCode::InternalError => "Internal",
+        }
+    }
+}
+
 /// IPSec protocol errors
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -195,6 +277,112 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl Error {
+    /// Get error code for programmatic handling
+    ///
+    /// Returns a stable error code that can be used for:
+    /// - Programmatic error handling
+    /// - Monitoring and alerting
+    /// - Error categorization
+    ///
+    /// # Returns
+    ///
+    /// `Some(ErrorCode)` if this error has a defined code, `None` otherwise.
+    pub fn code(&self) -> Option<ErrorCode> {
+        match self {
+            Error::InvalidMessage(_) => Some(ErrorCode::InvalidMessage),
+            Error::InvalidPayload(_) => Some(ErrorCode::InvalidPayload),
+            Error::InvalidParameter(_) => Some(ErrorCode::InvalidSyntax),
+            Error::UnsupportedVersion(_) => Some(ErrorCode::UnsupportedVersion),
+            Error::UnsupportedExchangeType(_) => Some(ErrorCode::InvalidSyntax),
+            Error::NoProposalChosen => Some(ErrorCode::NoProposalChosen),
+            Error::InvalidProposal(_) => Some(ErrorCode::InvalidSyntax),
+            Error::AuthenticationFailed(_) => Some(ErrorCode::AuthenticationFailed),
+            Error::SaNotFound(_) => Some(ErrorCode::SaNotFound),
+            Error::CryptoError(_) => Some(ErrorCode::CryptoError),
+            Error::ReplayDetected(_) => Some(ErrorCode::ReplayDetected),
+            Error::InvalidState(_) => Some(ErrorCode::InvalidState),
+            Error::InvalidStateTransition { .. } => Some(ErrorCode::InvalidStateTransition),
+            Error::InvalidKeyLength { .. } => Some(ErrorCode::InvalidKeyLength),
+            Error::Io(_) => Some(ErrorCode::NetworkError),
+            Error::Internal(_) => Some(ErrorCode::InternalError),
+            _ => None,
+        }
+    }
+
+    /// Add context to error message
+    ///
+    /// Wraps the error with additional context information.
+    /// Useful for adding operation context to errors propagated from lower layers.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Context description
+    ///
+    /// # Returns
+    ///
+    /// New error with context prepended to the message.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use fynx_proto::ipsec::error::Error;
+    ///
+    /// let err = Error::CryptoError("invalid key".to_string());
+    /// let err_with_context = err.with_context("ESP encryption");
+    ///
+    /// assert_eq!(
+    ///     err_with_context.to_string(),
+    ///     "Cryptographic error: ESP encryption: invalid key"
+    /// );
+    /// ```
+    pub fn with_context(self, context: &str) -> Self {
+        match self {
+            Error::InvalidMessage(msg) => {
+                Error::InvalidMessage(format!("{}: {}", context, msg))
+            }
+            Error::InvalidPayload(msg) => Error::InvalidPayload(format!("{}: {}", context, msg)),
+            Error::InvalidParameter(msg) => {
+                Error::InvalidParameter(format!("{}: {}", context, msg))
+            }
+            Error::InvalidProposal(msg) => {
+                Error::InvalidProposal(format!("{}: {}", context, msg))
+            }
+            Error::AuthenticationFailed(msg) => {
+                Error::AuthenticationFailed(format!("{}: {}", context, msg))
+            }
+            Error::SaNotFound(msg) => Error::SaNotFound(format!("{}: {}", context, msg)),
+            Error::CryptoError(msg) => Error::CryptoError(format!("{}: {}", context, msg)),
+            Error::InvalidState(msg) => Error::InvalidState(format!("{}: {}", context, msg)),
+            Error::MissingPayload(msg) => Error::MissingPayload(format!("{}: {}", context, msg)),
+            Error::Io(msg) => Error::Io(format!("{}: {}", context, msg)),
+            Error::Internal(msg) => Error::Internal(format!("{}: {}", context, msg)),
+            // For other variants, leave as-is (they have structured data, not just messages)
+            other => other,
+        }
+    }
+
+    /// Check if error is retryable
+    ///
+    /// Returns `true` if this error represents a transient condition
+    /// that may succeed on retry.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Error::Io(_) | Error::CryptoError(_))
+    }
+
+    /// Check if error is fatal
+    ///
+    /// Returns `true` if this error indicates an unrecoverable condition.
+    pub fn is_fatal(&self) -> bool {
+        matches!(
+            self,
+            Error::AuthenticationFailed(_)
+                | Error::InvalidState(_)
+                | Error::InvalidStateTransition { .. }
+        )
+    }
+}
 
 // Convert from std::io::Error
 impl From<std::io::Error> for Error {
@@ -742,5 +930,131 @@ mod tests {
 
         handler.set_default_retry_policy(custom_policy.clone());
         assert_eq!(handler.default_retry_policy(), &custom_policy);
+    }
+
+    // ErrorCode tests
+
+    #[test]
+    fn test_error_code_values() {
+        assert_eq!(ErrorCode::InvalidMessage as u32, 1001);
+        assert_eq!(ErrorCode::AuthenticationFailed as u32, 2001);
+        assert_eq!(ErrorCode::InvalidState as u32, 3001);
+        assert_eq!(ErrorCode::ReplayDetected as u32, 4001);
+        assert_eq!(ErrorCode::NetworkError as u32, 5001);
+        assert_eq!(ErrorCode::InternalError as u32, 9001);
+    }
+
+    #[test]
+    fn test_error_code_as_u32() {
+        assert_eq!(ErrorCode::InvalidMessage.as_u32(), 1001);
+        assert_eq!(ErrorCode::NoProposalChosen.as_u32(), 1004);
+    }
+
+    #[test]
+    fn test_error_code_category() {
+        assert_eq!(ErrorCode::InvalidMessage.category(), "Protocol");
+        assert_eq!(ErrorCode::AuthenticationFailed.category(), "Crypto");
+        assert_eq!(ErrorCode::InvalidState.category(), "State");
+        assert_eq!(ErrorCode::ReplayDetected.category(), "Security");
+        assert_eq!(ErrorCode::NetworkError.category(), "Network");
+        assert_eq!(ErrorCode::InternalError.category(), "Internal");
+    }
+
+    // Error::code() tests
+
+    #[test]
+    fn test_error_code_mapping() {
+        assert_eq!(
+            Error::InvalidMessage("test".into()).code(),
+            Some(ErrorCode::InvalidMessage)
+        );
+        assert_eq!(
+            Error::AuthenticationFailed("bad auth".into()).code(),
+            Some(ErrorCode::AuthenticationFailed)
+        );
+        assert_eq!(
+            Error::NoProposalChosen.code(),
+            Some(ErrorCode::NoProposalChosen)
+        );
+        assert_eq!(
+            Error::ReplayDetected(123).code(),
+            Some(ErrorCode::ReplayDetected)
+        );
+        assert_eq!(
+            Error::Io("timeout".into()).code(),
+            Some(ErrorCode::NetworkError)
+        );
+    }
+
+    #[test]
+    fn test_error_code_none_for_some_variants() {
+        // Some error variants don't have codes
+        assert!(Error::MessageTooLarge(1000).code().is_some() == false);
+        assert!(Error::InvalidSpi(123).code().is_some() == false);
+    }
+
+    // Error::with_context() tests
+
+    #[test]
+    fn test_error_with_context() {
+        let err = Error::CryptoError("invalid key".to_string());
+        let err_with_context = err.with_context("ESP encryption");
+
+        assert_eq!(
+            err_with_context.to_string(),
+            "Cryptographic error: ESP encryption: invalid key"
+        );
+    }
+
+    #[test]
+    fn test_error_with_context_multiple() {
+        let err = Error::InvalidMessage("bad format".to_string());
+        let err1 = err.with_context("IKE_SA_INIT");
+        let err2 = err1.with_context("handshake");
+
+        assert!(err2
+            .to_string()
+            .contains("handshake: IKE_SA_INIT: bad format"));
+    }
+
+    #[test]
+    fn test_error_with_context_structured() {
+        // Structured errors (non-string) should return unchanged
+        let err = Error::InvalidLength {
+            expected: 10,
+            actual: 5,
+        };
+        let err_with_context = err.clone().with_context("test");
+
+        assert_eq!(err, err_with_context);
+    }
+
+    // Error::is_retryable() tests
+
+    #[test]
+    fn test_error_is_retryable() {
+        assert!(Error::Io("timeout".into()).is_retryable());
+        assert!(Error::CryptoError("hash failed".into()).is_retryable());
+
+        assert!(!Error::AuthenticationFailed("bad sig".into()).is_retryable());
+        assert!(!Error::InvalidState("bad state".into()).is_retryable());
+        assert!(!Error::NoProposalChosen.is_retryable());
+    }
+
+    // Error::is_fatal() tests
+
+    #[test]
+    fn test_error_is_fatal() {
+        assert!(Error::AuthenticationFailed("bad auth".into()).is_fatal());
+        assert!(Error::InvalidState("bad state".into()).is_fatal());
+        assert!(Error::InvalidStateTransition {
+            from: "A".into(),
+            to: "B".into()
+        }
+        .is_fatal());
+
+        assert!(!Error::Io("timeout".into()).is_fatal());
+        assert!(!Error::NoProposalChosen.is_fatal());
+        assert!(!Error::ReplayDetected(123).is_fatal());
     }
 }
