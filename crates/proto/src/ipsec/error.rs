@@ -77,9 +77,9 @@ impl ErrorCode {
             | ErrorCode::CryptoError
             | ErrorCode::InvalidKeyLength => "Crypto",
 
-            ErrorCode::InvalidState
-            | ErrorCode::InvalidStateTransition
-            | ErrorCode::SaNotFound => "State",
+            ErrorCode::InvalidState | ErrorCode::InvalidStateTransition | ErrorCode::SaNotFound => {
+                "State"
+            }
 
             ErrorCode::ReplayDetected => "Security",
 
@@ -339,16 +339,12 @@ impl Error {
     /// ```
     pub fn with_context(self, context: &str) -> Self {
         match self {
-            Error::InvalidMessage(msg) => {
-                Error::InvalidMessage(format!("{}: {}", context, msg))
-            }
+            Error::InvalidMessage(msg) => Error::InvalidMessage(format!("{}: {}", context, msg)),
             Error::InvalidPayload(msg) => Error::InvalidPayload(format!("{}: {}", context, msg)),
             Error::InvalidParameter(msg) => {
                 Error::InvalidParameter(format!("{}: {}", context, msg))
             }
-            Error::InvalidProposal(msg) => {
-                Error::InvalidProposal(format!("{}: {}", context, msg))
-            }
+            Error::InvalidProposal(msg) => Error::InvalidProposal(format!("{}: {}", context, msg)),
             Error::AuthenticationFailed(msg) => {
                 Error::AuthenticationFailed(format!("{}: {}", context, msg))
             }

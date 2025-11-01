@@ -27,8 +27,8 @@
 use fynx_proto::ipsec::{IpsecServer, ServerConfig};
 use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,7 +46,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <bind_addr> <local_id> <psk>", args[0]);
         eprintln!();
         eprintln!("Example:");
-        eprintln!("  {} 0.0.0.0:500 server@example.com \"my-secret-key\"", args[0]);
+        eprintln!(
+            "  {} 0.0.0.0:500 server@example.com \"my-secret-key\"",
+            args[0]
+        );
         eprintln!();
         eprintln!("Note: Port 500 requires root/administrator privileges");
         eprintln!();
@@ -69,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Check if we have permission to bind to privileged port
     if bind_addr.port() < 1024 {
-        println!("⚠  WARNING: Binding to privileged port {} requires elevated permissions", bind_addr.port());
+        println!(
+            "⚠  WARNING: Binding to privileged port {} requires elevated permissions",
+            bind_addr.port()
+        );
         #[cfg(unix)]
         println!("   Run with: sudo cargo run --example ipsec_server --features ipsec");
         #[cfg(windows)]
@@ -96,8 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Press Ctrl+C to stop");
     println!();
     println!("Connect with:");
-    println!("  cargo run --example ipsec_client --features ipsec -- {} client@example.com {} \"{}\"",
-        bind_addr, local_id, String::from_utf8_lossy(psk));
+    println!(
+        "  cargo run --example ipsec_client --features ipsec -- {} client@example.com {} \"{}\"",
+        bind_addr,
+        local_id,
+        String::from_utf8_lossy(psk)
+    );
     println!();
 
     // Statistics
@@ -153,9 +163,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Print overall statistics
                 println!();
                 println!("Server Statistics:");
-                println!("  Total connections: {}", connections_accepted.load(Ordering::Relaxed));
-                println!("  Total messages:    {}", messages_received.load(Ordering::Relaxed));
-                println!("  Total bytes:       {}", bytes_received.load(Ordering::Relaxed));
+                println!(
+                    "  Total connections: {}",
+                    connections_accepted.load(Ordering::Relaxed)
+                );
+                println!(
+                    "  Total messages:    {}",
+                    messages_received.load(Ordering::Relaxed)
+                );
+                println!(
+                    "  Total bytes:       {}",
+                    bytes_received.load(Ordering::Relaxed)
+                );
                 println!();
             }
             Err(e) => {
@@ -163,7 +182,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!();
                 eprintln!("Troubleshooting:");
                 eprintln!("  1. Check if port is already in use");
-                eprintln!("  2. Verify you have permission to bind to port {}", bind_addr.port());
+                eprintln!(
+                    "  2. Verify you have permission to bind to port {}",
+                    bind_addr.port()
+                );
                 eprintln!("  3. Check firewall rules");
                 eprintln!("  4. Enable debug logging: RUST_LOG=debug");
                 eprintln!();

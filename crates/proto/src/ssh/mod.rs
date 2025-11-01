@@ -49,9 +49,13 @@
 
 pub mod auth;
 pub mod authorized_keys;
+pub mod channel;
 pub mod client;
 pub mod connection;
+pub mod connection_mgr;
 pub mod crypto;
+pub mod dispatcher;
+pub mod forwarding;
 pub mod hostkey;
 pub mod kex;
 pub mod kex_dh;
@@ -60,6 +64,8 @@ pub mod message;
 pub mod packet;
 pub mod privatekey;
 pub mod server;
+pub mod session;
+pub mod sftp;
 pub mod transport;
 pub mod version;
 
@@ -69,6 +75,7 @@ pub use auth::{
     AuthRequest, AuthSuccess,
 };
 pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
+pub use channel::{ChannelMessage, ChannelState, SshChannel};
 pub use client::{SshClient, SshClientConfig};
 pub use connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure, ChannelOpen,
@@ -76,7 +83,11 @@ pub use connection::{
     ChannelRequestType, ChannelSuccess, ChannelType, ChannelWindowAdjust, ExtendedDataType,
     MAX_PACKET_SIZE, MAX_WINDOW_SIZE,
 };
+pub use connection_mgr::SshConnection;
 pub use crypto::{CipherAlgorithm, DecryptionKey, EncryptionKey, MacAlgorithm, MacKey};
+pub use forwarding::{
+    parse_forward_addr, DynamicForward, ForwardAddr, LocalForward, RemoteForward,
+};
 pub use hostkey::{
     EcdsaP256HostKey, EcdsaP384HostKey, EcdsaP521HostKey, Ed25519HostKey, HostKey,
     HostKeyAlgorithm, RsaSha2_256HostKey, RsaSha2_512HostKey, SshRsaHostKey,
@@ -91,5 +102,10 @@ pub use privatekey::{
     PublicKey as PrivateKeyPublicKey, RsaPrivateKey, SimplePasswordCallback,
 };
 pub use server::{SessionHandler, SshServer, SshServerConfig, SshSession};
+pub use session::{
+    create_keepalive_message, ConnectionPoolConfig, ExponentialBackoff, KeepaliveTask, PoolAuth,
+    ReconnectConfig, ReconnectHandler, SshConnectionPool,
+};
+pub use sftp::{FileAttributes, FileMode, FileType, SftpClient, SftpError, SftpErrorCode};
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
 pub use version::Version;

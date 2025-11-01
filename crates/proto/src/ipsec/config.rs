@@ -5,7 +5,10 @@
 use super::{
     child_sa::SaLifetime,
     dpd::DpdConfig,
-    ikev2::proposal::{DhTransformId, EncrTransformId, PrfTransformId, Proposal, ProtocolId, Transform, TransformType},
+    ikev2::proposal::{
+        DhTransformId, EncrTransformId, PrfTransformId, Proposal, ProtocolId, Transform,
+        TransformType,
+    },
     Error, Result,
 };
 

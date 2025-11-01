@@ -459,7 +459,11 @@ async fn test_bidirectional_data_transfer() {
         // Try to receive echo
         match timeout(Duration::from_secs(2), client.recv_packet()).await {
             Ok(Ok(data)) => {
-                println!("✅ Received response for packet {}: {} bytes", i + 1, data.len());
+                println!(
+                    "✅ Received response for packet {}: {} bytes",
+                    i + 1,
+                    data.len()
+                );
             }
             _ => {
                 println!("⚠️ No response for packet {} (may be expected)", i + 1);

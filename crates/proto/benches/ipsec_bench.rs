@@ -51,8 +51,9 @@ fn create_test_child_sa() -> ChildSa {
     let nonce_i = vec![0x11u8; 32];
     let nonce_r = vec![0x22u8; 32];
 
-    let (sk_ei, sk_ai, _sk_er, _sk_ar) =
-        fynx_proto::ipsec::child_sa::derive_child_sa_keys(prf_alg, &sk_d, &nonce_i, &nonce_r, None, 16, 0);
+    let (sk_ei, sk_ai, _sk_er, _sk_ar) = fynx_proto::ipsec::child_sa::derive_child_sa_keys(
+        prf_alg, &sk_d, &nonce_i, &nonce_r, None, 16, 0,
+    );
 
     ChildSa {
         spi: 0x12345678,
@@ -85,8 +86,15 @@ fn bench_ike_sa_init_create(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                IkeSaInitExchange::create_request(&mut ctx, proposals.clone(), dh_public.clone(), nonce.clone(), None, None)
-                    .unwrap(),
+                IkeSaInitExchange::create_request(
+                    &mut ctx,
+                    proposals.clone(),
+                    dh_public.clone(),
+                    nonce.clone(),
+                    None,
+                    None,
+                )
+                .unwrap(),
             )
         });
     });
@@ -114,7 +122,9 @@ fn bench_ike_sa_init_process(c: &mut Criterion) {
     group.bench_function("process_request", |b| {
         b.iter(|| {
             let mut ctx_r = IkeSaContext::new_responder([0x01; 8], [0x02; 8]);
-            black_box(IkeSaInitExchange::process_request(&mut ctx_r, &init_req, &proposals).unwrap())
+            black_box(
+                IkeSaInitExchange::process_request(&mut ctx_r, &init_req, &proposals).unwrap(),
+            )
         });
     });
 
@@ -149,13 +159,7 @@ fn bench_key_derivation(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(fynx_proto::ipsec::child_sa::derive_child_sa_keys(
-                prf_alg,
-                &sk_d,
-                &nonce_i,
-                &nonce_r,
-                None,
-                16,
-                0,
+                prf_alg, &sk_d, &nonce_i, &nonce_r, None, 16, 0,
             ))
         });
     });
@@ -337,7 +341,13 @@ fn bench_full_handshake(c: &mut Criterion) {
             )
             .unwrap();
 
-            let _result = IkeAuthExchange::process_request(&mut ctx_r, &init_req_bytes, &auth_req, psk, &child_proposals);
+            let _result = IkeAuthExchange::process_request(
+                &mut ctx_r,
+                &init_req_bytes,
+                &auth_req,
+                psk,
+                &child_proposals,
+            );
 
             black_box(_result)
         });

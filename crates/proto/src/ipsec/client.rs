@@ -108,11 +108,7 @@ impl IpsecClient {
             .await
             .map_err(|e| Error::Io(e.to_string()))?;
 
-        self.local_addr = Some(
-            socket
-                .local_addr()
-                .map_err(|e| Error::Io(e.to_string()))?,
-        );
+        self.local_addr = Some(socket.local_addr().map_err(|e| Error::Io(e.to_string()))?);
         self.peer_addr = Some(peer_addr);
 
         // Connect socket to peer (for easier send/recv)
@@ -236,7 +232,13 @@ impl IpsecClient {
 
         // Process IKE_AUTH response
         let (_id_r_verified, child_proposal, ts_i_resp, ts_r_resp) =
-            IkeAuthExchange::process_request(&mut ctx, &init_req_bytes, &auth_resp, &self.config.psk, &self.config.esp_proposals)?;
+            IkeAuthExchange::process_request(
+                &mut ctx,
+                &init_req_bytes,
+                &auth_resp,
+                &self.config.psk,
+                &self.config.esp_proposals,
+            )?;
 
         // Verify state transition to Established
         if ctx.state != IkeState::Established {
@@ -445,7 +447,9 @@ impl IpsecClient {
 
             // 2. Send DELETE for IKE SA
             if let Ok(delete_ike_msg) =
-                super::ikev2::informational::InformationalExchange::create_delete_ike_sa_request(&mut ctx)
+                super::ikev2::informational::InformationalExchange::create_delete_ike_sa_request(
+                    &mut ctx,
+                )
             {
                 // Try to send, but ignore errors
                 let _ = self.send_ike_message(&delete_ike_msg).await;
@@ -546,7 +550,10 @@ impl IpsecClient {
 
             // Check if soft lifetime exceeded
             let age = child_sa.created_at.elapsed();
-            if child_sa.lifetime.is_soft_expired(age, child_sa.bytes_processed) {
+            if child_sa
+                .lifetime
+                .is_soft_expired(age, child_sa.bytes_processed)
+            {
                 spis_to_rekey.push(*spi);
             }
         }
@@ -701,11 +708,8 @@ mod tests {
         let mut client = IpsecClient::new(config);
 
         // Try to receive without connecting
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            client.recv_packet(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(50), client.recv_packet()).await;
 
         // Should either timeout or return error immediately
         if let Ok(recv_result) = result {
@@ -769,10 +773,7 @@ mod tests {
         client.ike_sa = Some(ctx);
 
         // Now DPD check should succeed (placeholder implementation)
-        client
-            .perform_dpd_check()
-            .await
-            .expect("DPD check failed");
+        client.perform_dpd_check().await.expect("DPD check failed");
     }
 
     #[tokio::test]
@@ -874,7 +875,10 @@ mod tests {
             ts_r: TrafficSelectorsPayload {
                 selectors: vec![TrafficSelector::ipv4_any()],
             },
-            proposal: crate::ipsec::ikev2::proposal::Proposal::new(1, crate::ipsec::ikev2::proposal::ProtocolId::Esp),
+            proposal: crate::ipsec::ikev2::proposal::Proposal::new(
+                1,
+                crate::ipsec::ikev2::proposal::ProtocolId::Esp,
+            ),
             seq_out: 1,
             replay_window: None,
             state: ChildSaState::Active,

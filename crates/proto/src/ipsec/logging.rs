@@ -75,11 +75,7 @@ pub fn log_esp_packet(operation: &str, spi: u32, seq: u32, payload_len: usize) {
 /// * `peer_addr` - Peer IP address and port
 /// * `role` - "initiator" or "responder"
 pub fn log_handshake_start(peer_addr: &str, role: &str) {
-    info!(
-        peer = peer_addr,
-        role = role,
-        "IKE handshake started"
-    );
+    info!(peer = peer_addr, role = role, "IKE handshake started");
 }
 
 /// Log IKE handshake completion
@@ -103,11 +99,7 @@ pub fn log_handshake_complete(peer_addr: &str, duration_ms: u64) {
 /// * `peer_addr` - Peer IP address and port
 /// * `error` - Error message
 pub fn log_handshake_failed(peer_addr: &str, error: &str) {
-    error!(
-        peer = peer_addr,
-        error = error,
-        "IKE handshake failed"
-    );
+    error!(peer = peer_addr, error = error, "IKE handshake failed");
 }
 
 /// Log IKE SA rekey start
@@ -160,10 +152,7 @@ pub fn log_child_sa_created(child_spi: u32, protocol: u8) {
 ///
 /// * `old_spi` - Old Child SA SPI
 pub fn log_child_rekey_start(old_spi: u32) {
-    info!(
-        old_child_spi = old_spi,
-        "Child SA rekey started"
-    );
+    info!(old_child_spi = old_spi, "Child SA rekey started");
 }
 
 /// Log Child SA rekey completion
@@ -187,11 +176,7 @@ pub fn log_child_rekey_complete(old_spi: u32, new_spi: u32) {
 /// * `child_spi` - Child SA SPI to delete
 /// * `reason` - Deletion reason (e.g., "shutdown", "rekey", "lifetime")
 pub fn log_child_sa_deleted(child_spi: u32, reason: &str) {
-    info!(
-        child_spi = child_spi,
-        reason = reason,
-        "Child SA deleted"
-    );
+    info!(child_spi = child_spi, reason = reason, "Child SA deleted");
 }
 
 /// Log DPD check

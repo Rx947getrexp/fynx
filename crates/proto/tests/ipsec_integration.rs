@@ -251,13 +251,9 @@ fn test_full_ike_handshake() {
     assert_eq!(ctx_r.state, IkeState::Established);
 
     // Initiator processes response
-    let (peer_id_r, _, _, _) = IkeAuthExchange::process_response(
-        &mut ctx_i,
-        &init_resp_bytes,
-        &auth_resp,
-        psk,
-    )
-    .expect("Failed to process IKE_AUTH response");
+    let (peer_id_r, _, _, _) =
+        IkeAuthExchange::process_response(&mut ctx_i, &init_resp_bytes, &auth_resp, psk)
+            .expect("Failed to process IKE_AUTH response");
 
     assert_eq!(ctx_i.state, IkeState::Established);
     assert_eq!(peer_id_r.data, vec![192, 168, 1, 2]);
@@ -367,10 +363,7 @@ fn test_create_request_invalid_state() {
     );
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid state"));
+    assert!(result.unwrap_err().to_string().contains("Invalid state"));
 }
 
 #[test]
@@ -445,10 +438,7 @@ fn test_key_derivation_missing_nonce() {
     let result = ctx.derive_keys(PrfAlgorithm::HmacSha256, 16, 16);
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("nonce not set"));
+    assert!(result.unwrap_err().to_string().contains("nonce not set"));
 }
 
 //
@@ -522,10 +512,10 @@ fn create_outbound_child_sa(spi: u32, sk_e: Vec<u8>) -> ChildSa {
         replay_window: None, // Disabled for outbound
         state: ChildSaState::Active,
         lifetime: SaLifetime {
-            soft_time: Duration::from_secs(2700),  // 45 minutes
-            hard_time: Duration::from_secs(3600),  // 60 minutes
-            soft_bytes: Some(900_000_000),         // 900 MB
-            hard_bytes: Some(1_000_000_000),       // 1 GB
+            soft_time: Duration::from_secs(2700), // 45 minutes
+            hard_time: Duration::from_secs(3600), // 60 minutes
+            soft_bytes: Some(900_000_000),        // 900 MB
+            hard_bytes: Some(1_000_000_000),      // 1 GB
         },
         created_at: std::time::Instant::now(),
         bytes_processed: 0,
@@ -580,8 +570,8 @@ fn test_esp_encrypt_decrypt_single_packet() {
     let next_header = 4; // IPv4
 
     // Encrypt (encapsulate)
-    let esp_packet = EspPacket::encapsulate(&mut sa_out, payload, next_header)
-        .expect("Failed to encapsulate");
+    let esp_packet =
+        EspPacket::encapsulate(&mut sa_out, payload, next_header).expect("Failed to encapsulate");
 
     // Verify ESP packet structure
     assert_eq!(esp_packet.spi, spi);
@@ -614,8 +604,7 @@ fn test_esp_sequence_number_handling() {
 
     // Send multiple packets and verify sequence numbers
     for expected_seq in 1..=5 {
-        let esp = EspPacket::encapsulate(&mut sa_out, payload, 4)
-            .expect("Encapsulation failed");
+        let esp = EspPacket::encapsulate(&mut sa_out, payload, 4).expect("Encapsulation failed");
 
         assert_eq!(esp.sequence, expected_seq as u32);
         assert_eq!(sa_out.seq_out, (expected_seq + 1) as u64);
@@ -648,7 +637,7 @@ fn test_esp_anti_replay_protection() {
     let result2 = esp1.decapsulate(&mut sa_in);
     assert!(result2.is_err());
     match result2 {
-        Err(fynx_proto::ipsec::Error::ReplayDetected(_)) => {}, // Expected
+        Err(fynx_proto::ipsec::Error::ReplayDetected(_)) => {} // Expected
         _ => panic!("Expected ReplayDetected error"),
     }
 
@@ -675,13 +664,11 @@ fn test_esp_multiple_packets() {
         let payload_bytes = payload.as_bytes();
 
         // Encrypt
-        let esp = EspPacket::encapsulate(&mut sa_out, payload_bytes, 4)
-            .expect("Encapsulation failed");
+        let esp =
+            EspPacket::encapsulate(&mut sa_out, payload_bytes, 4).expect("Encapsulation failed");
 
         // Decrypt
-        let (decrypted, next_header) = esp
-            .decapsulate(&mut sa_in)
-            .expect("Decapsulation failed");
+        let (decrypted, next_header) = esp.decapsulate(&mut sa_in).expect("Decapsulation failed");
 
         // Verify
         assert_eq!(decrypted, payload_bytes);
@@ -807,10 +794,7 @@ fn test_ike_sa_rekeying_soft_lifetime() {
     .expect("Failed to create IKE rekey response");
 
     // Verify response message
-    assert_eq!(
-        rekey_resp.header.exchange_type,
-        ExchangeType::CreateChildSa
-    );
+    assert_eq!(rekey_resp.header.exchange_type, ExchangeType::CreateChildSa);
     assert!(rekey_resp.header.flags.is_response());
     assert_eq!(nonce_r.len(), 32);
 
@@ -872,14 +856,8 @@ fn test_child_sa_rekeying() {
     rand::thread_rng().fill_bytes(&mut nonce_r[..]);
 
     let (proposal, _initiator_spi, ts_i_recv, ts_r_recv, _sk_ei, _sk_ai, _sk_er, _sk_ar) =
-        CreateChildSaExchange::process_request(
-            &ctx_r,
-            &rekey_req,
-            &nonce_r,
-            &esp_proposals,
-            None,
-        )
-        .expect("Failed to process Child SA rekey request");
+        CreateChildSaExchange::process_request(&ctx_r, &rekey_req, &nonce_r, &esp_proposals, None)
+            .expect("Failed to process Child SA rekey request");
 
     // Verify received parameters
     assert_eq!(proposal.protocol_id, ProtocolId::Esp);
@@ -941,10 +919,7 @@ fn test_sa_graceful_deletion() {
             .expect("Failed to create DELETE request");
 
     // Verify DELETE request
-    assert_eq!(
-        delete_req.header.exchange_type,
-        ExchangeType::Informational
-    );
+    assert_eq!(delete_req.header.exchange_type, ExchangeType::Informational);
     assert!(delete_req.header.flags.is_initiator());
 
     // NOTE: In real implementation, the responder would decrypt the INFORMATIONAL message
@@ -954,7 +929,6 @@ fn test_sa_graceful_deletion() {
 
     // Success: Child SA deletion message created successfully
     // In production, responder would process DELETE and remove the Child SA
-
 }
 
 #[test]
@@ -967,10 +941,7 @@ fn test_delete_ike_sa() {
         .expect("Failed to create DELETE IKE SA request");
 
     // Verify request
-    assert_eq!(
-        delete_req.header.exchange_type,
-        ExchangeType::Informational
-    );
+    assert_eq!(delete_req.header.exchange_type, ExchangeType::Informational);
     assert!(delete_req.header.flags.is_initiator());
 
     // NOTE: In real implementation, the responder would decrypt and process the DELETE
@@ -1023,19 +994,15 @@ fn test_invalid_proposal_no_proposal_chosen() {
     use fynx_proto::ipsec::ikev2::proposal::select_proposal;
 
     // Setup: initiator proposes AES-GCM-256, responder only supports AES-GCM-128
-    let initiator_proposals = vec![
-        Proposal::new(1, ProtocolId::Ike)
-            .add_transform(Transform::encr(EncrTransformId::AesGcm256)) // Only 256
-            .add_transform(Transform::prf(PrfTransformId::HmacSha256))
-            .add_transform(Transform::dh(DhTransformId::Group14)),
-    ];
+    let initiator_proposals = vec![Proposal::new(1, ProtocolId::Ike)
+        .add_transform(Transform::encr(EncrTransformId::AesGcm256)) // Only 256
+        .add_transform(Transform::prf(PrfTransformId::HmacSha256))
+        .add_transform(Transform::dh(DhTransformId::Group14))];
 
-    let responder_proposals = vec![
-        Proposal::new(1, ProtocolId::Ike)
-            .add_transform(Transform::encr(EncrTransformId::AesGcm128)) // Only 128
-            .add_transform(Transform::prf(PrfTransformId::HmacSha256))
-            .add_transform(Transform::dh(DhTransformId::Group14)),
-    ];
+    let responder_proposals = vec![Proposal::new(1, ProtocolId::Ike)
+        .add_transform(Transform::encr(EncrTransformId::AesGcm128)) // Only 128
+        .add_transform(Transform::prf(PrfTransformId::HmacSha256))
+        .add_transform(Transform::dh(DhTransformId::Group14))];
 
     // Attempt to select a proposal - should fail
     let result = select_proposal(&initiator_proposals, &responder_proposals);
@@ -1068,19 +1035,13 @@ fn test_authentication_failure_invalid_psk() {
 
     // Initiator creates AUTH payload using sk_pi (initiator's SK_p)
     let sk_pi = ctx_i.sk_pi.clone().unwrap();
-    let auth_payload_correct = auth::compute_psk_auth(
-        PrfAlgorithm::HmacSha256,
-        &sk_pi,
-        &signed_octets,
-    );
+    let auth_payload_correct =
+        auth::compute_psk_auth(PrfAlgorithm::HmacSha256, &sk_pi, &signed_octets);
 
     // Create AUTH payload with wrong SK_p (simulating wrong PSK)
     let wrong_sk_p = vec![0xFF; 32]; // Different key!
-    let auth_payload_wrong = auth::compute_psk_auth(
-        PrfAlgorithm::HmacSha256,
-        &wrong_sk_p,
-        &signed_octets,
-    );
+    let auth_payload_wrong =
+        auth::compute_psk_auth(PrfAlgorithm::HmacSha256, &wrong_sk_p, &signed_octets);
 
     // Verify with correct SK_p - should succeed
     let result_correct = auth::verify_psk_auth(
@@ -1158,10 +1119,7 @@ fn test_malformed_packet_buffer_too_short() {
     assert!(result.is_err());
     if let Err(e) = result {
         // Should get BufferTooShort error
-        assert!(matches!(
-            e,
-            fynx_proto::ipsec::Error::BufferTooShort { .. }
-        ));
+        assert!(matches!(e, fynx_proto::ipsec::Error::BufferTooShort { .. }));
     }
 
     // Success: Malformed packet correctly rejected

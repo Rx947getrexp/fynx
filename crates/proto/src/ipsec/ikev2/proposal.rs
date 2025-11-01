@@ -264,13 +264,17 @@ impl Transform {
         // Calculate total length (from length field onwards)
         // Transform Length = length field (2) + type (1) + reserved (1) + id (2) + attributes
         // = 6 + attr_len
-        let attr_bytes: Vec<Vec<u8>> = self.attributes.iter().map(|attr| {
-            // Attribute format: 2 bytes type/len, then value
-            let mut ab = Vec::new();
-            ab.extend_from_slice(&attr.attr_type.to_be_bytes());
-            ab.extend_from_slice(&attr.value);
-            ab
-        }).collect();
+        let attr_bytes: Vec<Vec<u8>> = self
+            .attributes
+            .iter()
+            .map(|attr| {
+                // Attribute format: 2 bytes type/len, then value
+                let mut ab = Vec::new();
+                ab.extend_from_slice(&attr.attr_type.to_be_bytes());
+                ab.extend_from_slice(&attr.value);
+                ab
+            })
+            .collect();
         let attr_len: usize = attr_bytes.iter().map(|ab| ab.len()).sum();
         let total_len = 2 + 1 + 1 + 2 + attr_len; // = 6 + attr_len
 
@@ -463,7 +467,8 @@ impl Proposal {
         let mut bytes = Vec::new();
 
         // Serialize all transforms
-        let transform_bytes: Vec<Vec<u8>> = self.transforms
+        let transform_bytes: Vec<Vec<u8>> = self
+            .transforms
             .iter()
             .enumerate()
             .map(|(i, t)| t.to_bytes(i == self.transforms.len() - 1))
@@ -611,11 +616,21 @@ mod tests {
         let transform = Transform::encr(EncrTransformId::AesGcm128);
         let bytes = transform.to_bytes(true);
 
-        eprintln!("Transform bytes ({} bytes): {:02x?}", bytes.len(), &bytes[..std::cmp::min(20, bytes.len())]);
+        eprintln!(
+            "Transform bytes ({} bytes): {:02x?}",
+            bytes.len(),
+            &bytes[..std::cmp::min(20, bytes.len())]
+        );
         eprintln!("  Byte 0 (last/more): {}", bytes[0]);
-        eprintln!("  Bytes 4-5 (length): {:?}", u16::from_be_bytes([bytes[4], bytes[5]]));
+        eprintln!(
+            "  Bytes 4-5 (length): {:?}",
+            u16::from_be_bytes([bytes[4], bytes[5]])
+        );
         eprintln!("  Byte 6 (type): {}", bytes[6]);
-        eprintln!("  Bytes 8-9 (id): {:?}", u16::from_be_bytes([bytes[8], bytes[9]]));
+        eprintln!(
+            "  Bytes 8-9 (id): {:?}",
+            u16::from_be_bytes([bytes[8], bytes[9]])
+        );
 
         let (parsed, is_last, len) = Transform::from_bytes(&bytes).unwrap();
         assert_eq!(parsed.transform_type, TransformType::Encr);

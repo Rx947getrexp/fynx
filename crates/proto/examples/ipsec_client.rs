@@ -41,10 +41,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command-line arguments
     let args: Vec<String> = env::args().collect();
     if args.len() != 5 {
-        eprintln!("Usage: {} <server_addr> <local_id> <remote_id> <psk>", args[0]);
+        eprintln!(
+            "Usage: {} <server_addr> <local_id> <remote_id> <psk>",
+            args[0]
+        );
         eprintln!();
         eprintln!("Example:");
-        eprintln!("  {} 10.0.0.1:500 client@example.com server@example.com \"my-secret-key\"", args[0]);
+        eprintln!(
+            "  {} 10.0.0.1:500 client@example.com server@example.com \"my-secret-key\"",
+            args[0]
+        );
         eprintln!();
         eprintln!("Environment variables:");
         eprintln!("  RUST_LOG=debug    Enable debug logging");
@@ -139,10 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Try to receive response (with timeout)
         match timeout(Duration::from_secs(5), client.recv_packet()).await {
             Ok(Ok(response)) => {
-                println!(
-                    "  ✓ Received response: {} bytes",
-                    response.len()
-                );
+                println!("  ✓ Received response: {} bytes", response.len());
                 if let Ok(text) = String::from_utf8(response) {
                     println!("    Content: \"{}\"", text);
                 }
