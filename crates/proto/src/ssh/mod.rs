@@ -54,6 +54,7 @@ pub mod client;
 pub mod connection;
 pub mod connection_mgr;
 pub mod crypto;
+pub mod dispatcher;
 pub mod forwarding;
 pub mod hostkey;
 pub mod kex;
