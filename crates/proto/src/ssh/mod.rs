@@ -65,6 +65,7 @@ pub mod packet;
 pub mod privatekey;
 pub mod server;
 pub mod session;
+pub mod sftp;
 pub mod transport;
 pub mod version;
 

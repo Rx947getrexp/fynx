@@ -32,7 +32,7 @@
 
 use tracing::{debug, error, info, trace, warn};
 
-/// Log IKE SA state transition
+/// Log IKE SA state transition 
 ///
 /// # Arguments
 ///
