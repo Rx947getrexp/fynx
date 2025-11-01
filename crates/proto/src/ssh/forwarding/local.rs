@@ -213,10 +213,13 @@ impl LocalForward {
         dispatcher.lock().await.register_channel(local_id, tx).await;
 
         // Send CHANNEL_OPEN (direct-tcpip) message
-        // TODO: Build proper direct-tcpip CHANNEL_OPEN message
-        // For now, use Session as placeholder
         let channel_open = ChannelOpen::new(
-            ChannelType::Session,  // TODO: Should be DirectTcpip with target addr/port
+            ChannelType::DirectTcpip {
+                host: target.host.clone(),
+                port: target.port as u32,
+                originator_address: peer_addr.clone(),
+                originator_port: 0, // Unknown originator port
+            },
             local_id,
             MAX_WINDOW_SIZE,
             MAX_PACKET_SIZE,

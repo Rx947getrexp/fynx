@@ -172,10 +172,13 @@ impl DynamicForward {
         dispatcher.lock().await.register_channel(local_id, tx).await;
 
         // Send CHANNEL_OPEN (direct-tcpip) message
-        // TODO: Build proper direct-tcpip CHANNEL_OPEN message with target_host and target_port
-        // For now, use Session as placeholder
         let channel_open = ChannelOpen::new(
-            ChannelType::Session,
+            ChannelType::DirectTcpip {
+                host: target_host.clone(),
+                port: target_port as u32,
+                originator_address: "127.0.0.1".to_string(), // SOCKS5 client is local
+                originator_port: 0, // Unknown SOCKS5 client port
+            },
             local_id,
             MAX_WINDOW_SIZE,
             MAX_PACKET_SIZE,
