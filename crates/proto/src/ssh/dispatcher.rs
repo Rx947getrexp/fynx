@@ -2,7 +2,7 @@
 //!
 //! Routes incoming SSH messages to the appropriate channels.
 
-use crate::ssh::channel::{ChannelMessage, SshChannel};
+use crate::ssh::channel::ChannelMessage;
 use crate::ssh::connection_mgr::SshConnection;
 use crate::ssh::message::MessageType;
 use fynx_platform::{FynxError, FynxResult};
@@ -87,7 +87,8 @@ impl MessageDispatcher {
                 let msg_type = payload[0];
 
                 // Route message based on type
-                if let Err(e) = Self::route_message(&channels, &global_tx, msg_type, &payload).await {
+                if let Err(e) = Self::route_message(&channels, &global_tx, msg_type, &payload).await
+                {
                     warn!("Failed to route message: {}", e);
                 }
             }
@@ -112,24 +113,32 @@ impl MessageDispatcher {
                     return Err(FynxError::Protocol("Invalid CHANNEL_DATA".to_string()));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
-                let data_len = u32::from_be_bytes([payload[5], payload[6], payload[7], payload[8]]) as usize;
-                let data = payload[9..9+data_len].to_vec();
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let data_len =
+                    u32::from_be_bytes([payload[5], payload[6], payload[7], payload[8]]) as usize;
+                let data = payload[9..9 + data_len].to_vec();
 
                 Self::send_to_channel(channels, channel_id, ChannelMessage::Data(data)).await?;
             }
 
             Some(MessageType::ChannelExtendedData) => {
                 if payload.len() < 13 {
-                    return Err(FynxError::Protocol("Invalid CHANNEL_EXTENDED_DATA".to_string()));
+                    return Err(FynxError::Protocol(
+                        "Invalid CHANNEL_EXTENDED_DATA".to_string(),
+                    ));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 // Skip data_type (bytes 5-8)
-                let data_len = u32::from_be_bytes([payload[9], payload[10], payload[11], payload[12]]) as usize;
-                let data = payload[13..13+data_len].to_vec();
+                let data_len =
+                    u32::from_be_bytes([payload[9], payload[10], payload[11], payload[12]])
+                        as usize;
+                let data = payload[13..13 + data_len].to_vec();
 
-                Self::send_to_channel(channels, channel_id, ChannelMessage::ExtendedData(data)).await?;
+                Self::send_to_channel(channels, channel_id, ChannelMessage::ExtendedData(data))
+                    .await?;
             }
 
             Some(MessageType::ChannelEof) => {
@@ -137,7 +146,8 @@ impl MessageDispatcher {
                     return Err(FynxError::Protocol("Invalid CHANNEL_EOF".to_string()));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 Self::send_to_channel(channels, channel_id, ChannelMessage::Eof).await?;
             }
 
@@ -146,7 +156,8 @@ impl MessageDispatcher {
                     return Err(FynxError::Protocol("Invalid CHANNEL_CLOSE".to_string()));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 Self::send_to_channel(channels, channel_id, ChannelMessage::Close).await?;
             }
 
@@ -155,7 +166,8 @@ impl MessageDispatcher {
                     return Err(FynxError::Protocol("Invalid CHANNEL_SUCCESS".to_string()));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 Self::send_to_channel(channels, channel_id, ChannelMessage::Success).await?;
             }
 
@@ -164,7 +176,8 @@ impl MessageDispatcher {
                     return Err(FynxError::Protocol("Invalid CHANNEL_FAILURE".to_string()));
                 }
 
-                let channel_id = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                let channel_id =
+                    u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 Self::send_to_channel(channels, channel_id, ChannelMessage::Failure).await?;
             }
 

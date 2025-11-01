@@ -87,9 +87,9 @@ pub fn parse_forward_addr(addr: &str) -> FynxResult<ForwardAddr> {
         )));
     }
 
-    let port = parts[0].parse::<u16>().map_err(|_| {
-        FynxError::Protocol(format!("Invalid port number: {}", parts[0]))
-    })?;
+    let port = parts[0]
+        .parse::<u16>()
+        .map_err(|_| FynxError::Protocol(format!("Invalid port number: {}", parts[0])))?;
 
     let host = parts[1].to_string();
 

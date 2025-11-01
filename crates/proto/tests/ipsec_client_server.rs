@@ -114,7 +114,10 @@ async fn test_server_accept_timeout() {
     let result = tokio::time::timeout(Duration::from_millis(100), server.accept()).await;
 
     // Should timeout
-    assert!(result.is_err(), "Accept should timeout when no client connects");
+    assert!(
+        result.is_err(),
+        "Accept should timeout when no client connects"
+    );
     assert_eq!(server.session_count(), 0);
 }
 
@@ -152,7 +155,10 @@ async fn test_client_server_lifecycle() {
     match recv_result {
         Ok(result) => {
             // Operation completed quickly, should be an error
-            assert!(result.is_err(), "recv_packet should fail when not connected");
+            assert!(
+                result.is_err(),
+                "recv_packet should fail when not connected"
+            );
         }
         Err(_) => {
             // Timeout - also acceptable for this test
@@ -178,7 +184,10 @@ async fn test_client_server_lifecycle() {
     assert_eq!(server.session_count(), 0);
 
     // Shutdown empty server should succeed
-    server.shutdown().await.expect("Server shutdown should succeed");
+    server
+        .shutdown()
+        .await
+        .expect("Server shutdown should succeed");
 }
 
 /// Test client background task APIs

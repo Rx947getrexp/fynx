@@ -60,12 +60,7 @@ pub struct SshChannel {
 
 impl SshChannel {
     /// Creates a new SSH channel (legacy, without message channels).
-    pub fn new(
-        local_id: u32,
-        remote_id: u32,
-        window_size: u32,
-        max_packet_size: u32,
-    ) -> Self {
+    pub fn new(local_id: u32, remote_id: u32, window_size: u32, max_packet_size: u32) -> Self {
         Self {
             local_id,
             remote_id,
@@ -131,9 +126,7 @@ impl SshChannel {
     /// Consumes window space.
     pub fn consume_window(&mut self, bytes: u32) -> FynxResult<()> {
         if bytes > self.window_size {
-            return Err(FynxError::Protocol(
-                "Not enough window space".to_string()
-            ));
+            return Err(FynxError::Protocol("Not enough window space".to_string()));
         }
         self.window_size -= bytes;
         Ok(())
@@ -225,7 +218,8 @@ mod tests {
         let (mut channel, tx) = SshChannel::with_channels(0, 100, 1048576, 32768);
 
         // Send a message
-        tx.send(ChannelMessage::Data(b"test data".to_vec())).unwrap();
+        tx.send(ChannelMessage::Data(b"test data".to_vec()))
+            .unwrap();
 
         // Receive the message
         let msg = channel.read().await.unwrap();

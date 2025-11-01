@@ -163,7 +163,9 @@ impl LocalForward {
                     target,
                     connection,
                     dispatcher,
-                ).await {
+                )
+                .await
+                {
                     warn!("[Connection #{}] Error: {}", connection_id, e);
                 }
             });
@@ -175,13 +177,13 @@ impl LocalForward {
     /// This is called for each accepted connection.
     async fn handle_connection(
         connection_id: u64,
-        mut local_stream: TcpStream,
+        local_stream: TcpStream,
         target: ForwardAddr,
         connection: Arc<Mutex<SshConnection>>,
         dispatcher: Arc<Mutex<MessageDispatcher>>,
     ) -> FynxResult<()> {
-        use crate::ssh::channel::{SshChannel, ChannelMessage};
-        use crate::ssh::connection::{ChannelType, ChannelOpen, MAX_WINDOW_SIZE, MAX_PACKET_SIZE};
+        use crate::ssh::channel::{ChannelMessage, SshChannel};
+        use crate::ssh::connection::{ChannelOpen, ChannelType, MAX_PACKET_SIZE, MAX_WINDOW_SIZE};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let peer_addr = local_stream

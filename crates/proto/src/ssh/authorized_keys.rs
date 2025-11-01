@@ -126,9 +126,9 @@ impl AuthorizedKey {
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
-            return Err(FynxError::Protocol(format!(
-                "Invalid authorized_keys line: too few fields"
-            )));
+            return Err(FynxError::Protocol(
+                "Invalid authorized_keys line: too few fields".to_string(),
+            ));
         }
 
         // Check if first field is an option or algorithm

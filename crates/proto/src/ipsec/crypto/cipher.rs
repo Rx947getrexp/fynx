@@ -120,11 +120,10 @@ impl CipherAlgorithm {
                     .map_err(|_| Error::CryptoError("Failed to create ChaCha20 cipher".into()))?;
 
                 // Convert slice to array reference and create Nonce
-                let nonce_array: &[u8; 12] = iv.try_into()
-                    .map_err(|_| Error::InvalidIvLength {
-                        expected: 12,
-                        actual: iv.len(),
-                    })?;
+                let nonce_array: &[u8; 12] = iv.try_into().map_err(|_| Error::InvalidIvLength {
+                    expected: 12,
+                    actual: iv.len(),
+                })?;
                 let nonce = chacha20poly1305::Nonce::from(*nonce_array);
 
                 let payload = Payload {
@@ -216,11 +215,10 @@ impl CipherAlgorithm {
                     .map_err(|_| Error::CryptoError("Failed to create ChaCha20 cipher".into()))?;
 
                 // Convert slice to array reference and create Nonce
-                let nonce_array: &[u8; 12] = iv.try_into()
-                    .map_err(|_| Error::InvalidIvLength {
-                        expected: 12,
-                        actual: iv.len(),
-                    })?;
+                let nonce_array: &[u8; 12] = iv.try_into().map_err(|_| Error::InvalidIvLength {
+                    expected: 12,
+                    actual: iv.len(),
+                })?;
                 let nonce = chacha20poly1305::Nonce::from(*nonce_array);
 
                 let payload = Payload {

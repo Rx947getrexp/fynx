@@ -132,8 +132,7 @@ impl KnownHost {
             let pattern = pattern.trim();
 
             // Handle negation (!host)
-            if pattern.starts_with('!') {
-                let neg_pattern = &pattern[1..];
+            if let Some(neg_pattern) = pattern.strip_prefix('!') {
                 if Self::matches_pattern(neg_pattern, &full_host)? {
                     return Ok(false); // Negation matched, this entry doesn't apply
                 }
@@ -282,9 +281,9 @@ impl KnownHost {
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
-            return Err(FynxError::Protocol(format!(
-                "Invalid known_hosts line: too few fields (need at least 3)"
-            )));
+            return Err(FynxError::Protocol(
+                "Invalid known_hosts line: too few fields (need at least 3)".to_string(),
+            ));
         }
 
         let hostname_pattern = parts[0].to_string();

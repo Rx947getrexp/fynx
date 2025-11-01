@@ -175,7 +175,12 @@ impl SshConnectionPool {
                     // We need to move the client out, but we can't because it's borrowed
                     // This is a design issue - we need to restructure
                     // For now, create a new connection
-                    self.create_connection(addr, username, PoolAuth::Password(password.to_string())).await?
+                    self.create_connection(
+                        addr,
+                        username,
+                        PoolAuth::Password(password.to_string()),
+                    )
+                    .await?,
                 ));
 
                 return Ok(client);
@@ -185,18 +190,14 @@ impl SshConnectionPool {
         // Check pool size limit
         if connections.len() >= self.config.max_connections {
             warn!("Connection pool full ({} connections)", connections.len());
-            return Err(FynxError::Protocol(
-                "Connection pool is full".to_string()
-            ));
+            return Err(FynxError::Protocol("Connection pool is full".to_string()));
         }
 
         // Create new connection
         debug!("Creating new connection: {}", key);
-        let client = self.create_connection(
-            addr,
-            username,
-            PoolAuth::Password(password.to_string())
-        ).await?;
+        let client = self
+            .create_connection(addr, username, PoolAuth::Password(password.to_string()))
+            .await?;
 
         let pooled = PooledConnection {
             client,
@@ -211,7 +212,9 @@ impl SshConnectionPool {
         // We need to return Arc<Mutex<SshClient>> but we just inserted into HashMap
 
         // For now, create a new one (not ideal, but demonstrates the API)
-        let client = self.create_connection(addr, username, PoolAuth::Password(password.to_string())).await?;
+        let client = self
+            .create_connection(addr, username, PoolAuth::Password(password.to_string()))
+            .await?;
         Ok(Arc::new(Mutex::new(client)))
     }
 
@@ -223,23 +226,19 @@ impl SshConnectionPool {
         private_key: &PrivateKey,
     ) -> FynxResult<Arc<Mutex<SshClient>>> {
         let key = Self::connection_key(addr, username);
-        let mut connections = self.connections.lock().await;
+        let connections = self.connections.lock().await;
 
         // Check pool size limit
         if connections.len() >= self.config.max_connections {
             warn!("Connection pool full ({} connections)", connections.len());
-            return Err(FynxError::Protocol(
-                "Connection pool is full".to_string()
-            ));
+            return Err(FynxError::Protocol("Connection pool is full".to_string()));
         }
 
         // Create new connection
         debug!("Creating new connection with key: {}", key);
-        let client = self.create_connection(
-            addr,
-            username,
-            PoolAuth::PrivateKey(private_key.clone())
-        ).await?;
+        let client = self
+            .create_connection(addr, username, PoolAuth::PrivateKey(private_key.clone()))
+            .await?;
 
         Ok(Arc::new(Mutex::new(client)))
     }
@@ -291,7 +290,10 @@ impl SshConnectionPool {
         connections.retain(|key, conn| {
             let idle_time = now.duration_since(conn.last_used);
             if !conn.in_use && idle_time > idle_timeout {
-                info!("Removing idle connection: {} (idle for {:?})", key, idle_time);
+                info!(
+                    "Removing idle connection: {} (idle for {:?})",
+                    key, idle_time
+                );
                 false
             } else {
                 true

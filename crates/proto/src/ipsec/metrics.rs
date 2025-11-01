@@ -233,9 +233,7 @@ impl IpsecMetrics {
             child_sa_active: self.child_sa_active.load(Ordering::Relaxed),
             ike_sa_deleted: self.ike_sa_deleted.load(Ordering::Relaxed),
             child_sa_deleted: self.child_sa_deleted.load(Ordering::Relaxed),
-            proposal_negotiation_failed: self
-                .proposal_negotiation_failed
-                .load(Ordering::Relaxed),
+            proposal_negotiation_failed: self.proposal_negotiation_failed.load(Ordering::Relaxed),
             authentication_failed: self.authentication_failed.load(Ordering::Relaxed),
         }
     }

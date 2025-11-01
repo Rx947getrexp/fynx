@@ -27,6 +27,8 @@ use crate::ssh::connection::{
     ChannelData, ChannelOpen, ChannelOpenConfirmation, ChannelRequest, ChannelRequestType,
     ChannelType,
 };
+use crate::ssh::connection_mgr::SshConnection;
+use crate::ssh::dispatcher::MessageDispatcher;
 use crate::ssh::hostkey::HostKeyAlgorithm;
 use crate::ssh::kex::{negotiate_algorithm, KexInit, NewKeys};
 use crate::ssh::kex_dh::Curve25519Exchange;
@@ -34,19 +36,17 @@ use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsFile, StrictHostKeyChecki
 use crate::ssh::message::MessageType;
 use crate::ssh::packet::Packet;
 use crate::ssh::privatekey::PrivateKey;
-use crate::ssh::connection_mgr::SshConnection;
-use crate::ssh::dispatcher::MessageDispatcher;
 use crate::ssh::session::{create_keepalive_message, ReconnectConfig};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::ssh::transport::{State, TransportConfig, TransportState};
 use crate::ssh::version::Version;
 use base64::Engine;
 use fynx_platform::{FynxError, FynxResult};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 
 /// User prompt callback for host key verification.
 ///
@@ -716,7 +716,7 @@ impl SshClient {
 
         // Helper to write SSH string (uint32 length + data)
         let write_string = |h: &mut Sha256, s: &[u8]| {
-            h.update(&(s.len() as u32).to_be_bytes());
+            h.update((s.len() as u32).to_be_bytes());
             h.update(s);
         };
 
@@ -725,11 +725,11 @@ impl SshClient {
         let write_mpint = |h: &mut Sha256, data: &[u8]| {
             // If high bit is set, add 0x00 prefix
             if !data.is_empty() && (data[0] & 0x80) != 0 {
-                h.update(&((data.len() + 1) as u32).to_be_bytes());
-                h.update(&[0x00]);
+                h.update(((data.len() + 1) as u32).to_be_bytes());
+                h.update([0x00]);
                 h.update(data);
             } else {
-                h.update(&(data.len() as u32).to_be_bytes());
+                h.update((data.len() as u32).to_be_bytes());
                 h.update(data);
             }
         };
@@ -1458,11 +1458,12 @@ impl SshClient {
 
         // For now, return an error indicating this must be done during construction
         // In a future refactor, we could restructure to allow this
-        return Err(FynxError::Protocol(
+        Err(FynxError::Protocol(
             "enable_async_mode() must be called during client construction. \
              For now, async mode is not available for existing connections. \
-             This will be improved in a future version.".to_string()
-        ));
+             This will be improved in a future version."
+                .to_string(),
+        ))
 
         // TODO: Future implementation would:
         // 1. Take ownership of self.stream and self.transport
@@ -1503,21 +1504,22 @@ impl SshClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn open_channel(&mut self, channel_type: ChannelType) -> FynxResult<crate::ssh::channel::SshChannel> {
+    pub async fn open_channel(
+        &mut self,
+        channel_type: ChannelType,
+    ) -> FynxResult<crate::ssh::channel::SshChannel> {
         use crate::ssh::channel::SshChannel;
         use crate::ssh::connection::{MAX_PACKET_SIZE, MAX_WINDOW_SIZE};
 
         // Check if async mode is enabled
         let dispatcher = self.dispatcher.as_ref().ok_or_else(|| {
             FynxError::Protocol(
-                "Async mode not enabled. Call enable_async_mode() first.".to_string()
+                "Async mode not enabled. Call enable_async_mode() first.".to_string(),
             )
         })?;
 
         let connection = self.connection.as_ref().ok_or_else(|| {
-            FynxError::Protocol(
-                "Connection not available in async mode.".to_string()
-            )
+            FynxError::Protocol("Connection not available in async mode.".to_string())
         })?;
 
         // Allocate channel ID
@@ -1538,12 +1540,8 @@ impl SshClient {
         dispatcher.lock().await.register_channel(local_id, tx).await;
 
         // Send CHANNEL_OPEN message
-        let channel_open = ChannelOpen::new(
-            channel_type,
-            local_id,
-            MAX_WINDOW_SIZE,
-            MAX_PACKET_SIZE,
-        );
+        let channel_open =
+            ChannelOpen::new(channel_type, local_id, MAX_WINDOW_SIZE, MAX_PACKET_SIZE);
         let open_msg = channel_open.to_bytes();
 
         {
@@ -1621,7 +1619,7 @@ impl SshClient {
         // Ensure authenticated
         if !self.is_authenticated() {
             return Err(FynxError::Security(
-                "Cannot start SFTP session: not authenticated".to_string()
+                "Cannot start SFTP session: not authenticated".to_string(),
             ));
         }
 
@@ -1631,9 +1629,11 @@ impl SshClient {
         }
 
         // Get connection and dispatcher
-        let connection = self.connection()
+        let connection = self
+            .connection()
             .ok_or_else(|| FynxError::Protocol("Async mode not enabled".to_string()))?;
-        let dispatcher = self.dispatcher()
+        let dispatcher = self
+            .dispatcher()
             .ok_or_else(|| FynxError::Protocol("Async mode not enabled".to_string()))?;
 
         // Create SFTP client (this performs protocol initialization)

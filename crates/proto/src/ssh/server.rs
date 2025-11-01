@@ -497,7 +497,7 @@ impl SshSession {
 
         // Helper to write SSH string (uint32 length + data)
         let write_string = |h: &mut Sha256, s: &[u8]| {
-            h.update(&(s.len() as u32).to_be_bytes());
+            h.update((s.len() as u32).to_be_bytes());
             h.update(s);
         };
 
@@ -505,11 +505,11 @@ impl SshSession {
         let write_mpint = |h: &mut Sha256, data: &[u8]| {
             // If high bit is set, add 0x00 prefix
             if !data.is_empty() && (data[0] & 0x80) != 0 {
-                h.update(&((data.len() + 1) as u32).to_be_bytes());
-                h.update(&[0x00]);
+                h.update(((data.len() + 1) as u32).to_be_bytes());
+                h.update([0x00]);
                 h.update(data);
             } else {
-                h.update(&(data.len() as u32).to_be_bytes());
+                h.update((data.len() as u32).to_be_bytes());
                 h.update(data);
             }
         };

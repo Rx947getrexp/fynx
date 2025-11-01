@@ -56,12 +56,12 @@
 //! # }
 //! ```
 
+pub mod dynamic;
 pub mod local;
 pub mod remote;
-pub mod dynamic;
 pub mod types;
 
+pub use dynamic::DynamicForward;
 pub use local::LocalForward;
 pub use remote::RemoteForward;
-pub use dynamic::DynamicForward;
-pub use types::{ForwardAddr, parse_forward_addr};
+pub use types::{parse_forward_addr, ForwardAddr};

@@ -8,8 +8,8 @@ use crate::ssh::connection::{MAX_PACKET_SIZE, MAX_WINDOW_SIZE};
 use crate::ssh::connection_mgr::SshConnection;
 use crate::ssh::dispatcher::MessageDispatcher;
 use fynx_platform::{FynxError, FynxResult};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -39,7 +39,7 @@ impl SftpClient {
         info!("Opening SFTP session");
 
         // Allocate channel ID and create channel
-        let (local_id, mut channel, tx) = {
+        let (local_id, channel, tx) = {
             let mut conn = connection.lock().await;
             let local_id = conn.allocate_channel_id();
             let (channel, tx) = SshChannel::with_channels(
@@ -134,7 +134,10 @@ impl SftpClient {
             version_msg.payload[3],
         ]);
 
-        info!("SFTP protocol initialized (server version: {})", server_version);
+        info!(
+            "SFTP protocol initialized (server version: {})",
+            server_version
+        );
 
         Ok(())
     }
@@ -165,9 +168,7 @@ impl SftpClient {
                     // Ignore other messages
                 }
                 None => {
-                    return Err(FynxError::Protocol(
-                        "Channel in legacy mode".to_string()
-                    ));
+                    return Err(FynxError::Protocol("Channel in legacy mode".to_string()));
                 }
             }
         }
@@ -200,11 +201,11 @@ impl SftpClient {
         info!("Uploading {} -> {}", local_path, remote_path);
 
         // Read local file
-        let mut file = tokio::fs::File::open(local_path).await
+        let mut file = tokio::fs::File::open(local_path)
+            .await
             .map_err(FynxError::Io)?;
 
-        let metadata = file.metadata().await
-            .map_err(FynxError::Io)?;
+        let metadata = file.metadata().await.map_err(FynxError::Io)?;
         let file_size = metadata.len();
 
         debug!("Local file size: {} bytes", file_size);
@@ -235,20 +236,15 @@ impl SftpClient {
         let mut total_written = 0u64;
 
         loop {
-            let bytes_read = file.read(&mut buffer).await
-                .map_err(FynxError::Io)?;
+            let bytes_read = file.read(&mut buffer).await.map_err(FynxError::Io)?;
 
             if bytes_read == 0 {
                 break; // EOF
             }
 
             let request_id = self.next_request_id();
-            let write_payload = self.build_write_request(
-                request_id,
-                &handle,
-                offset,
-                &buffer[..bytes_read],
-            );
+            let write_payload =
+                self.build_write_request(request_id, &handle, offset, &buffer[..bytes_read]);
             let write_msg = SftpMessage::new(SftpMessageType::Write, write_payload);
             self.send_message(&write_msg).await?;
 
@@ -321,7 +317,8 @@ impl SftpClient {
         debug!("Remote file opened, handle length: {}", handle.len());
 
         // Create local file
-        let mut local_file = tokio::fs::File::create(local_path).await
+        let mut local_file = tokio::fs::File::create(local_path)
+            .await
             .map_err(FynxError::Io)?;
 
         // Read data in chunks (32KB recommended)
@@ -349,8 +346,7 @@ impl SftpClient {
                     }
 
                     // Write to local file
-                    local_file.write_all(&data).await
-                        .map_err(FynxError::Io)?;
+                    local_file.write_all(&data).await.map_err(FynxError::Io)?;
 
                     offset += data.len() as u64;
                     total_read += data.len() as u64;
@@ -389,8 +385,7 @@ impl SftpClient {
         }
 
         // Flush and sync local file
-        local_file.flush().await
-            .map_err(FynxError::Io)?;
+        local_file.flush().await.map_err(FynxError::Io)?;
 
         info!("Downloaded {} bytes", total_read);
 
@@ -471,7 +466,9 @@ impl SftpClient {
                             break;
                         } else {
                             self.verify_status_ok(response)?;
-                            return Err(FynxError::Protocol("Unexpected STATUS response".to_string()));
+                            return Err(FynxError::Protocol(
+                                "Unexpected STATUS response".to_string(),
+                            ));
                         }
                     } else {
                         return Err(FynxError::Protocol("STATUS payload too short".to_string()));
@@ -505,7 +502,13 @@ impl SftpClient {
     // Helper methods for building SFTP request messages
 
     /// Builds SSH_FXP_OPEN request payload.
-    fn build_open_request(&self, request_id: u32, filename: &str, flags: u32, mode: u32) -> Vec<u8> {
+    fn build_open_request(
+        &self,
+        request_id: u32,
+        filename: &str,
+        flags: u32,
+        mode: u32,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
 
         // request-id
@@ -542,7 +545,13 @@ impl SftpClient {
     }
 
     /// Builds SSH_FXP_WRITE request payload.
-    fn build_write_request(&self, request_id: u32, handle: &[u8], offset: u64, data: &[u8]) -> Vec<u8> {
+    fn build_write_request(
+        &self,
+        request_id: u32,
+        handle: &[u8],
+        offset: u64,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
 
         // request-id
@@ -618,12 +627,8 @@ impl SftpClient {
         }
 
         // Skip request-id (first 4 bytes)
-        let handle_len = u32::from_be_bytes([
-            payload[4],
-            payload[5],
-            payload[6],
-            payload[7],
-        ]) as usize;
+        let handle_len =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
 
         if payload.len() < 8 + handle_len {
             return Err(FynxError::Protocol("HANDLE data incomplete".to_string()));
@@ -639,12 +644,8 @@ impl SftpClient {
         }
 
         // Skip request-id (first 4 bytes)
-        let data_len = u32::from_be_bytes([
-            payload[4],
-            payload[5],
-            payload[6],
-            payload[7],
-        ]) as usize;
+        let data_len =
+            u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
 
         if payload.len() < 8 + data_len {
             return Err(FynxError::Protocol("DATA incomplete".to_string()));
@@ -660,12 +661,7 @@ impl SftpClient {
         }
 
         // Skip request-id (first 4 bytes)
-        let count = u32::from_be_bytes([
-            payload[4],
-            payload[5],
-            payload[6],
-            payload[7],
-        ]) as usize;
+        let count = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
 
         let mut offset = 8;
         let mut entries = Vec::with_capacity(count);
@@ -673,7 +669,9 @@ impl SftpClient {
         for _ in 0..count {
             // Parse filename (string)
             if payload.len() < offset + 4 {
-                return Err(FynxError::Protocol("NAME entry incomplete (filename length)".to_string()));
+                return Err(FynxError::Protocol(
+                    "NAME entry incomplete (filename length)".to_string(),
+                ));
             }
             let filename_len = u32::from_be_bytes([
                 payload[offset],
@@ -684,14 +682,19 @@ impl SftpClient {
             offset += 4;
 
             if payload.len() < offset + filename_len {
-                return Err(FynxError::Protocol("NAME entry incomplete (filename)".to_string()));
+                return Err(FynxError::Protocol(
+                    "NAME entry incomplete (filename)".to_string(),
+                ));
             }
-            let filename = String::from_utf8_lossy(&payload[offset..offset + filename_len]).to_string();
+            let filename =
+                String::from_utf8_lossy(&payload[offset..offset + filename_len]).to_string();
             offset += filename_len;
 
             // Parse longname (string) - we skip this for now
             if payload.len() < offset + 4 {
-                return Err(FynxError::Protocol("NAME entry incomplete (longname length)".to_string()));
+                return Err(FynxError::Protocol(
+                    "NAME entry incomplete (longname length)".to_string(),
+                ));
             }
             let longname_len = u32::from_be_bytes([
                 payload[offset],
@@ -702,7 +705,9 @@ impl SftpClient {
             offset += 4;
 
             if payload.len() < offset + longname_len {
-                return Err(FynxError::Protocol("NAME entry incomplete (longname)".to_string()));
+                return Err(FynxError::Protocol(
+                    "NAME entry incomplete (longname)".to_string(),
+                ));
             }
             offset += longname_len; // Skip longname
 
@@ -730,8 +735,7 @@ impl SftpClient {
                 msg.payload[7],
             ]);
 
-            let sftp_error = SftpErrorCode::from_u32(error_code)
-                .unwrap_or(SftpErrorCode::Failure);
+            let sftp_error = SftpErrorCode::from_u32(error_code).unwrap_or(SftpErrorCode::Failure);
 
             return Err(FynxError::Protocol(format!(
                 "SFTP operation failed: {}",
@@ -766,8 +770,7 @@ impl SftpClient {
         ]);
 
         if error_code != SftpErrorCode::Ok as u32 {
-            let sftp_error = SftpErrorCode::from_u32(error_code)
-                .unwrap_or(SftpErrorCode::Failure);
+            let sftp_error = SftpErrorCode::from_u32(error_code).unwrap_or(SftpErrorCode::Failure);
 
             return Err(FynxError::Protocol(format!(
                 "SFTP operation failed: {}",

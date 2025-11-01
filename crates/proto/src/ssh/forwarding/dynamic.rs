@@ -123,7 +123,9 @@ impl DynamicForward {
                     socks_stream,
                     connection,
                     dispatcher,
-                ).await {
+                )
+                .await
+                {
                     warn!("[SOCKS #{}] Error: {}", connection_id, e);
                 }
             });
@@ -137,8 +139,10 @@ impl DynamicForward {
         connection: Arc<Mutex<SshConnection>>,
         dispatcher: Arc<Mutex<MessageDispatcher>>,
     ) -> FynxResult<()> {
-        use crate::ssh::channel::{SshChannel, ChannelMessage};
-        use crate::ssh::connection::{ChannelType, ChannelOpen, ChannelData, MAX_WINDOW_SIZE, MAX_PACKET_SIZE};
+        use crate::ssh::channel::{ChannelMessage, SshChannel};
+        use crate::ssh::connection::{
+            ChannelData, ChannelOpen, ChannelType, MAX_PACKET_SIZE, MAX_WINDOW_SIZE,
+        };
 
         // Perform SOCKS5 handshake to get target address
         let (target_host, target_port) = match Self::socks5_handshake(&mut socks_stream).await {
@@ -177,7 +181,7 @@ impl DynamicForward {
                 host: target_host.clone(),
                 port: target_port as u32,
                 originator_address: "127.0.0.1".to_string(), // SOCKS5 client is local
-                originator_port: 0, // Unknown SOCKS5 client port
+                originator_port: 0,                          // Unknown SOCKS5 client port
             },
             local_id,
             MAX_WINDOW_SIZE,
@@ -302,7 +306,9 @@ impl DynamicForward {
 
         let nmethods = buf[1] as usize;
         if nmethods == 0 {
-            return Err(FynxError::Protocol("No authentication methods provided".to_string()));
+            return Err(FynxError::Protocol(
+                "No authentication methods provided".to_string(),
+            ));
         }
 
         stream.read_exact(&mut buf[..nmethods]).await?;
@@ -315,7 +321,9 @@ impl DynamicForward {
         stream.read_exact(&mut buf[..4]).await?;
 
         if buf[0] != 5 {
-            return Err(FynxError::Protocol("Invalid SOCKS version in request".to_string()));
+            return Err(FynxError::Protocol(
+                "Invalid SOCKS version in request".to_string(),
+            ));
         }
 
         if buf[1] != 1 {

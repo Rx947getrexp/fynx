@@ -77,14 +77,17 @@ pub use auth::{
 pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
 pub use channel::{ChannelMessage, ChannelState, SshChannel};
 pub use client::{SshClient, SshClientConfig};
-pub use connection_mgr::SshConnection;
 pub use connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure, ChannelOpen,
     ChannelOpenConfirmation, ChannelOpenFailure, ChannelOpenFailureReason, ChannelRequest,
     ChannelRequestType, ChannelSuccess, ChannelType, ChannelWindowAdjust, ExtendedDataType,
     MAX_PACKET_SIZE, MAX_WINDOW_SIZE,
 };
+pub use connection_mgr::SshConnection;
 pub use crypto::{CipherAlgorithm, DecryptionKey, EncryptionKey, MacAlgorithm, MacKey};
+pub use forwarding::{
+    parse_forward_addr, DynamicForward, ForwardAddr, LocalForward, RemoteForward,
+};
 pub use hostkey::{
     EcdsaP256HostKey, EcdsaP384HostKey, EcdsaP521HostKey, Ed25519HostKey, HostKey,
     HostKeyAlgorithm, RsaSha2_256HostKey, RsaSha2_512HostKey, SshRsaHostKey,
@@ -98,14 +101,11 @@ pub use privatekey::{
     EcdsaCurve, EcdsaPrivateKey, Ed25519PrivateKey, PasswordCallback, PrivateKey,
     PublicKey as PrivateKeyPublicKey, RsaPrivateKey, SimplePasswordCallback,
 };
-pub use forwarding::{
-    parse_forward_addr, DynamicForward, ForwardAddr, LocalForward, RemoteForward,
-};
 pub use server::{SessionHandler, SshServer, SshServerConfig, SshSession};
 pub use session::{
-    create_keepalive_message, ConnectionPoolConfig, ExponentialBackoff, KeepaliveTask,
-    PoolAuth, ReconnectConfig, ReconnectHandler, SshConnectionPool,
+    create_keepalive_message, ConnectionPoolConfig, ExponentialBackoff, KeepaliveTask, PoolAuth,
+    ReconnectConfig, ReconnectHandler, SshConnectionPool,
 };
+pub use sftp::{FileAttributes, FileMode, FileType, SftpClient, SftpError, SftpErrorCode};
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
 pub use version::Version;
-pub use sftp::{FileAttributes, FileMode, FileType, SftpClient, SftpError, SftpErrorCode};

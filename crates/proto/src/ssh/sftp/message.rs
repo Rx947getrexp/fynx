@@ -149,21 +149,18 @@ impl SftpMessage {
     /// Parses from bytes.
     pub fn from_bytes(data: &[u8]) -> FynxResult<Self> {
         if data.len() < 5 {
-            return Err(FynxError::Protocol(
-                "SFTP message too short".to_string()
-            ));
+            return Err(FynxError::Protocol("SFTP message too short".to_string()));
         }
 
         let length = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
 
         if data.len() < 4 + length {
-            return Err(FynxError::Protocol(
-                "SFTP message incomplete".to_string()
-            ));
+            return Err(FynxError::Protocol("SFTP message incomplete".to_string()));
         }
 
-        let msg_type = SftpMessageType::from_u8(data[4])
-            .ok_or_else(|| FynxError::Protocol(format!("Unknown SFTP message type: {}", data[4])))?;
+        let msg_type = SftpMessageType::from_u8(data[4]).ok_or_else(|| {
+            FynxError::Protocol(format!("Unknown SFTP message type: {}", data[4]))
+        })?;
 
         let payload = data[5..4 + length].to_vec();
 
@@ -201,9 +198,9 @@ mod tests {
     #[test]
     fn test_message_deserialization() {
         let bytes = vec![
-            0, 0, 0, 5,  // length = 5
-            1,           // type = Init
-            0, 0, 0, 3,  // payload (version 3)
+            0, 0, 0, 5, // length = 5
+            1, // type = Init
+            0, 0, 0, 3, // payload (version 3)
         ];
 
         let msg = SftpMessage::from_bytes(&bytes).unwrap();

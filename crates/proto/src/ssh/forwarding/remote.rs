@@ -34,7 +34,7 @@
 use super::types::ForwardAddr;
 use crate::ssh::connection_mgr::SshConnection;
 use crate::ssh::dispatcher::MessageDispatcher;
-use fynx_platform::{FynxError, FynxResult};
+use fynx_platform::FynxResult;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -134,7 +134,10 @@ impl RemoteForward {
             use crate::ssh::message::MessageType;
             if global_msg[0] != MessageType::ChannelOpen as u8 {
                 // Not a CHANNEL_OPEN, ignore
-                debug!("Received non-CHANNEL_OPEN global message: {}", global_msg[0]);
+                debug!(
+                    "Received non-CHANNEL_OPEN global message: {}",
+                    global_msg[0]
+                );
                 continue;
             }
 
@@ -142,7 +145,9 @@ impl RemoteForward {
             // TODO: Proper parsing of forwarded-tcpip CHANNEL_OPEN
             // For now, log that we received it
 
-            info!("Received CHANNEL_OPEN message, forwarded-tcpip handling not yet fully implemented");
+            info!(
+                "Received CHANNEL_OPEN message, forwarded-tcpip handling not yet fully implemented"
+            );
 
             // TODO:
             // 1. Parse channel parameters (sender_channel, window_size, etc.)

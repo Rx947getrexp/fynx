@@ -180,7 +180,7 @@ impl PublicKey {
         let hash = Sha256::digest(&ssh_bytes);
 
         // Format as SHA256:base64 (without padding)
-        let base64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&hash);
+        let base64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash);
         format!("SHA256:{}", base64)
     }
 }
@@ -252,7 +252,7 @@ impl PrivateKey {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_file<P: AsRef<Path>>(path: P, password: Option<&str>) -> FynxResult<Self> {
-        let data = std::fs::read(path.as_ref()).map_err(|e| FynxError::Io(e))?;
+        let data = std::fs::read(path.as_ref()).map_err(FynxError::Io)?;
 
         // Try to read as text (PEM or OpenSSH text format)
         if let Ok(text) = std::str::from_utf8(&data) {

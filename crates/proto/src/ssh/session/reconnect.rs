@@ -90,12 +90,11 @@ impl ExponentialBackoff {
         } else {
             self.current_attempt += 1;
             let multiplier = 2u32.saturating_pow(self.current_attempt - 1);
-            let backoff = self
-                .config
+
+            self.config
                 .initial_backoff
                 .saturating_mul(multiplier)
-                .min(self.config.max_backoff);
-            backoff
+                .min(self.config.max_backoff)
         }
     }
 
@@ -161,12 +160,10 @@ impl ReconnectHandler {
                     "Reconnection failed after {} attempts",
                     self.config.max_retries
                 );
-                return Err(fynx_platform::FynxError::Protocol(
-                    format!(
-                        "Reconnection failed after {} retries",
-                        self.config.max_retries
-                    ),
-                ));
+                return Err(fynx_platform::FynxError::Protocol(format!(
+                    "Reconnection failed after {} retries",
+                    self.config.max_retries
+                )));
             }
 
             let backoff_duration = self.backoff.next_backoff();

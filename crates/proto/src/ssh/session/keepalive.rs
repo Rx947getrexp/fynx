@@ -215,15 +215,19 @@ mod tests {
 
         // Should have run 3 times (at 100ms, 200ms, 300ms)
         let count = counter.load(Ordering::Relaxed);
-        assert!(count >= 3 && count <= 4, "Expected 3-4 calls, got {}", count);
+        assert!(
+            count >= 3 && count <= 4,
+            "Expected 3-4 calls, got {}",
+            count
+        );
 
         assert!(!task.is_running());
     }
 
     #[tokio::test]
     async fn test_keepalive_task_stops_on_error() {
-        use std::sync::atomic::AtomicBool;
         use fynx_platform::FynxError;
+        use std::sync::atomic::AtomicBool;
 
         let should_fail = Arc::new(AtomicBool::new(false));
         let should_fail_clone = Arc::clone(&should_fail);

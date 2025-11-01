@@ -94,9 +94,7 @@ impl IpsecServer {
             .await
             .map_err(|e| Error::Io(e.to_string()))?;
 
-        let local_addr = socket
-            .local_addr()
-            .map_err(|e| Error::Io(e.to_string()))?;
+        let local_addr = socket.local_addr().map_err(|e| Error::Io(e.to_string()))?;
 
         Ok(Self {
             config,
@@ -447,7 +445,9 @@ impl IpsecSession {
 
         // 2. Send DELETE for IKE SA
         if let Ok(delete_ike_msg) =
-            super::ikev2::informational::InformationalExchange::create_delete_ike_sa_request(&mut self.ike_sa)
+            super::ikev2::informational::InformationalExchange::create_delete_ike_sa_request(
+                &mut self.ike_sa,
+            )
         {
             // Note: We can't send from session without socket reference
             // In a real implementation, this would be sent via the server
