@@ -240,21 +240,86 @@ impl LocalForward {
         );
 
         // Bidirectional relay between local socket and SSH channel
-        // TODO: This requires proper bidirectional relay implementation
-        // For now, just indicate the connection was established but relay is not yet implemented
+        // Split local_stream into read and write halves
+        let (mut local_read, mut local_write) = tokio::io::split(local_stream);
 
-        warn!(
-            "[Connection #{}] Relay not yet implemented - requires full channel I/O support",
-            connection_id
-        );
+        // Get remote_id for creating data messages
+        let remote_id = channel.remote_id();
 
-        // TODO: Implement bidirectional relay:
-        // 1. Spawn task to read from local_stream and write to SSH channel
-        // 2. Spawn task to read from SSH channel and write to local_stream
-        // 3. Wait for either task to complete or error
-        //
-        // This requires implementing proper I/O traits or using manual buffering
-        // between the local TcpStream and the SSH channel's message-based interface
+        // Create shared shutdown signal
+        let shutdown = Arc::new(tokio::sync::Notify::new());
+        let shutdown_upload = Arc::clone(&shutdown);
+        let shutdown_download = Arc::clone(&shutdown);
+
+        // Task 1: Read from local socket, write to SSH channel (upload)
+        let connection_upload = Arc::clone(&connection);
+        let upload_task = tokio::spawn(async move {
+            let mut buf = vec![0u8; 32768];
+            loop {
+                match local_read.read(&mut buf).await {
+                    Ok(0) => {
+                        // EOF from local socket
+                        debug!("[Connection #{}] Local EOF", connection_id);
+                        break;
+                    }
+                    Ok(n) => {
+                        // Send CHANNEL_DATA message
+                        use crate::ssh::connection::ChannelData;
+                        let channel_data = ChannelData::new(remote_id, buf[..n].to_vec());
+                        let data_msg = channel_data.to_bytes();
+
+                        let mut conn = connection_upload.lock().await;
+                        if let Err(e) = conn.send_packet(&data_msg).await {
+                            warn!("[Connection #{}] Failed to send data: {}", connection_id, e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[Connection #{}] Local read error: {}", connection_id, e);
+                        break;
+                    }
+                }
+            }
+            shutdown_upload.notify_one();
+        });
+
+        // Task 2: Read from SSH channel, write to local socket (download)
+        let download_task = tokio::spawn(async move {
+            loop {
+                match channel.read().await {
+                    Ok(Some(ChannelMessage::Data(data))) => {
+                        if let Err(e) = local_write.write_all(&data).await {
+                            warn!("[Connection #{}] Local write error: {}", connection_id, e);
+                            break;
+                        }
+                    }
+                    Ok(Some(ChannelMessage::Eof)) | Ok(Some(ChannelMessage::Close)) => {
+                        debug!("[Connection #{}] SSH channel EOF/Close", connection_id);
+                        break;
+                    }
+                    Ok(Some(_)) => {
+                        // Other message types, ignore
+                    }
+                    Ok(None) => {
+                        // Legacy mode, shouldn't happen
+                        warn!("[Connection #{}] Channel in legacy mode", connection_id);
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("[Connection #{}] Channel read error: {}", connection_id, e);
+                        break;
+                    }
+                }
+            }
+            shutdown_download.notify_one();
+        });
+
+        // Wait for either task to complete
+        shutdown.notified().await;
+
+        // Tasks will complete on their own, but we can abort them to be safe
+        upload_task.abort();
+        download_task.abort();
 
         // Unregister channel
         dispatcher.lock().await.unregister_channel(local_id).await;
