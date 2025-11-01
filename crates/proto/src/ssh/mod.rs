@@ -72,7 +72,7 @@ pub use auth::{
     AuthRequest, AuthSuccess,
 };
 pub use authorized_keys::{AuthorizedKey, AuthorizedKeysFile};
-pub use channel::{ChannelState, SshChannel};
+pub use channel::{ChannelMessage, ChannelState, SshChannel};
 pub use client::{SshClient, SshClientConfig};
 pub use connection::{
     ChannelClose, ChannelData, ChannelEof, ChannelExtendedData, ChannelFailure, ChannelOpen,
