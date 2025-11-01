@@ -628,14 +628,14 @@ checksum = "05f29059c0c2090612e8d742178b0580d2dc940c837851ad723096f87af6663e"
 name = "fynx-detect"
 version = "0.1.0"
 dependencies = [
- "fynx-platform 0.1.0-alpha.2",
+ "fynx-platform 0.1.0-alpha.3",
 ]
 
 [[package]]
 name = "fynx-exploit"
 version = "0.1.0"
 dependencies = [
- "fynx-platform 0.1.0-alpha.2",
+ "fynx-platform 0.1.0-alpha.3",
 ]
 
 [[package]]
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "fynx-platform"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -664,12 +664,12 @@ dependencies = [
 name = "fynx-protect"
 version = "0.1.0"
 dependencies = [
- "fynx-platform 0.1.0-alpha.2",
+ "fynx-platform 0.1.0-alpha.3",
 ]
 
 [[package]]
 name = "fynx-proto"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -721,7 +721,7 @@ dependencies = [
 name = "fynx-rustsec"
 version = "0.1.0"
 dependencies = [
- "fynx-platform 0.1.0-alpha.2",
+ "fynx-platform 0.1.0-alpha.3",
 ]
 
 [[package]]
