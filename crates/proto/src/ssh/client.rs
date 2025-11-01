@@ -1572,6 +1572,73 @@ impl SshClient {
     pub fn dispatcher(&self) -> Option<Arc<Mutex<MessageDispatcher>>> {
         self.dispatcher.as_ref().map(Arc::clone)
     }
+
+    /// Creates an SFTP client session.
+    ///
+    /// This method:
+    /// 1. Ensures async mode is enabled (enables it if needed)
+    /// 2. Opens an SSH channel with the "sftp" subsystem
+    /// 3. Performs SFTP protocol initialization (SSH_FXP_INIT/VERSION exchange)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use fynx_proto::ssh::client::SshClient;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = SshClient::connect("server:22").await?;
+    /// client.authenticate_password("user", "password").await?;
+    ///
+    /// // Create SFTP session
+    /// let mut sftp = client.sftp().await?;
+    ///
+    /// // Upload file
+    /// sftp.upload("local.txt", "/remote/file.txt").await?;
+    ///
+    /// // Download file
+    /// sftp.download("/remote/file.txt", "local.txt").await?;
+    ///
+    /// // List directory
+    /// let entries = sftp.readdir("/remote/path").await?;
+    /// for (filename, attrs) in entries {
+    ///     println!("{}", filename);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Client is not authenticated
+    /// - Async mode cannot be enabled
+    /// - SFTP subsystem cannot be started
+    /// - SFTP protocol initialization fails
+    pub async fn sftp(&mut self) -> FynxResult<crate::ssh::sftp::SftpClient> {
+        use crate::ssh::sftp::SftpClient;
+
+        // Ensure authenticated
+        if !self.is_authenticated() {
+            return Err(FynxError::Security(
+                "Cannot start SFTP session: not authenticated".to_string()
+            ));
+        }
+
+        // Ensure async mode is enabled
+        if !self.is_async_mode() {
+            self.enable_async_mode().await?;
+        }
+
+        // Get connection and dispatcher
+        let connection = self.connection()
+            .ok_or_else(|| FynxError::Protocol("Async mode not enabled".to_string()))?;
+        let dispatcher = self.dispatcher()
+            .ok_or_else(|| FynxError::Protocol("Async mode not enabled".to_string()))?;
+
+        // Create SFTP client (this performs protocol initialization)
+        SftpClient::new(connection, dispatcher).await
+    }
 }
 
 #[cfg(test)]

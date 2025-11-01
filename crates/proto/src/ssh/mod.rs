@@ -108,3 +108,4 @@ pub use session::{
 };
 pub use transport::{EncryptionParams, State, TransportConfig, TransportState};
 pub use version::Version;
+pub use sftp::{FileAttributes, FileMode, FileType, SftpClient, SftpError, SftpErrorCode};
