@@ -45,7 +45,7 @@ ecdsa = "0.16"
 signature = "2.2"
 
 # Utilities
-bytes = "1.5"
+bytes = "1.11"
 zeroize = { version = "1.7", features = ["derive"] }
 rand = "0.8"
 thiserror = "1.0"
